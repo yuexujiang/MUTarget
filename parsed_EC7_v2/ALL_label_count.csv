@@ -1,0 +1,10 @@
+label,note_count,protein_count,protein_count_for_first_label
+SIGNAL,3226,3226,3196
+Nucleus,826,635,570
+Mitochondrion,793,793,792
+chloroplast,351,348,346
+Nucleus_export,159,125,125
+ER,146,146,146
+Peroxisome,62,62,62
+Thylakoid,46,46,46
+dual,17,17,17

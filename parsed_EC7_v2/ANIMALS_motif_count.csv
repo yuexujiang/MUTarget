@@ -1,0 +1,36 @@
+motif_note,count
+Microbody targeting signal,17
+Peroxisome,9
+Peroxisome localization signal,2
+Microbody targeting signal; atypical,8
+Peroxisomal targeting signal,2
+Prevents secretion from ER,108
+Endoplasmic reticulum retention motif,1
+Non-canonical ER retention motif,2
+Nuclear export signal,87
+Nuclear export signal 1,20
+Nuclear export signal 2,20
+Nuclear export signal 3,8
+Nuclear export signal; masked by interaction with SEM1,3
+Nuclear export signal (NES),4
+Mitochondrion,514
+Nuclear localization signal,306
+Bipartite nuclear localization signal,31
+Nuclear localization signal 1,12
+Nuclear localization signal 2,12
+Nuclear localization signal (NLS),15
+Nuclear localization signal (NLS2),3
+Nuclear localization signal (NLS) 1,8
+Nuclear localization signal (NLS) 2,8
+Nuclear import signal,3
+Nuclear localization signal (NLS1),1
+Nuclear localization signal NLS1,3
+Nuclear localization signal NLS2,3
+Nuclear localization signal 1 (NLS 1),2
+Nuclear localization signal 2 (NLS 2),2
+Nuclear localization signal (NLS) 3,1
+Nuclear localization signal 3,2
+Nuclear localization signal 4,2
+Nuclear localization signal 5,2
+Nuclear and nucleolar localization signal,2
+SIGNAL,2731

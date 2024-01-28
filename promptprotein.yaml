@@ -36,7 +36,6 @@ dependencies:
   - filelock=3.9.0
   - freetype=2.12.1
   - giflib=5.2.1
-  - icc_rt=2022.1.0
   - idna=3.4
   - importlib-metadata=6.8.0
   - importlib_metadata=6.8.0
@@ -102,7 +101,6 @@ dependencies:
   - pytorch=2.0.1
   - pytorch-cuda=11.7
   - pytorch-mutex=1.0
-  - pywin32=305
   - pyzmq=23.2.1
   - requests=2.31.0
   - safetensors=0.3.3
@@ -118,8 +116,6 @@ dependencies:
   - traitlets=5.11.2
   - typing_extensions=4.7.1
   - urllib3=1.26.16
-  - vc=14.2
-  - vs2015_runtime=14.27.29016
   - wcwidth=0.2.8
   - wheel=0.38.4
   - win_inet_pton=1.1.0
@@ -176,4 +172,3 @@ dependencies:
     - werkzeug==3.0.0
     - xxhash==3.3.0
     - yarl==1.9.2
-prefix: C:\Users\yjm85\Anaconda3\envs\promptprotein

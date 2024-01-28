@@ -16,8 +16,8 @@ pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
 
-
-
+# TODO: change the path to esm models.
+torch.hub.set_dir("/home/zengs/zengs_data/torch_hub")
 
 
 def train_loop(tools):
@@ -57,6 +57,8 @@ def train_loop(tools):
             #     cs_probab = cs_probab[:,:200]
 
             # w=torch.ones([9,1,1])*5
+            # print(seq_frag)
+            # print(motif_logits.shape, target_frag.shape, encoded_seq.shape)
             weighted_loss_sum = tools['loss_function'](motif_logits, target_frag.to(tools['train_device']))
             # losses=[]
             # for head in range(motif_logits.size()[1]):
@@ -568,12 +570,22 @@ def main(config_dict, valid_batch_number, test_batch_number):
     # dataloaders_dict = prepare_dataloaders(valid_batch_number, test_batch_number, npz_file, seq_file, configs)
     dataloaders_dict = prepare_dataloaders(configs, valid_batch_number, test_batch_number)
     customlog(logfilepath, "Done Loading data\n")
+    
+    if configs.encoder.composition=="official_esm_v2":
+        encoder=prepare_models(configs,logfilepath, curdir_path)
+        customlog(logfilepath, "Done initialize model\n")
+        
+        alphabet = encoder.model.alphabet
+        tokenizer = alphabet.get_batch_converter(
+            truncation_seq_length=configs.encoder.max_len
+        )
+    else:  
+        tokenizer=prepare_tokenizer(configs, curdir_path)
+        customlog(logfilepath, "Done initialize tokenizer\n")
 
-    tokenizer=prepare_tokenizer(configs, curdir_path)
-    customlog(logfilepath, "Done initialize tokenizer\n")
-
-    encoder=prepare_models(configs,logfilepath, curdir_path)
-    customlog(logfilepath, "Done initialize model\n")
+        encoder=prepare_models(configs,logfilepath, curdir_path)
+        customlog(logfilepath, "Done initialize model\n")
+    
     
     optimizer, scheduler = prepare_optimizer(encoder, configs, len(dataloaders_dict["train"]), logfilepath)
     customlog(logfilepath, 'preparing optimizer is done\n')

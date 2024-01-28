@@ -11,7 +11,7 @@ from PromptProtein.models import openprotein_promptprotein
 from transformers import EsmModel
 from utils import customlog
 
-
+import esm_utilities
 
 
 
@@ -65,6 +65,8 @@ def prepare_tokenizer(configs, curdir_path):
         model, dictionary = openprotein_promptprotein(os.path.join(curdir_path, "PromptProtein", "PromptProtein.pt"))
         tokenizer_promprot = PromptConverter(dictionary)
         tokenizer={"tokenizer_esm":tokenizer_esm, "tokenizer_promprot":tokenizer_promprot}
+    else:
+        tokenizer = None
     return tokenizer
 
 def tokenize(tools, seq):
@@ -76,6 +78,16 @@ def tokenize(tools, seq):
                                                   )
         # encoded_sequence['input_ids'] = torch.squeeze(encoded_sequence['input_ids'])
         # encoded_sequence['attention_mask'] = torch.squeeze(encoded_sequence['attention_mask'])
+    elif tools['composition']=="official_esm_v2":
+        # data = [("", one_seq) for one_seq in seq]
+        
+        data = []
+        for one_seq in seq:
+            if len(one_seq) < tools['max_len']:
+                one_seq = one_seq + "<pad>" * (tools['max_len'] - len(one_seq) - 2)
+            data.append(("", one_seq))
+        
+        _, _, encoded_sequence = tools["tokenizer"](data)
     elif tools['composition']=="promprot":
         if tools['prm4prmpro']=='seq':
             prompts = ['<seq>']
@@ -218,6 +230,32 @@ class Encoder(nn.Module):
         # motif_logits = pooled_features[:, 0:9, 1:-1]
         return motif_logits
 
+class OfficialEsmEncoder(nn.Module):
+    def __init__(self, configs, model_name='esm2_t33_650M_UR50D', model_type='esm_v2'):
+        super().__init__()
+        self.model_type = model_type
+        if model_type == 'official_esm_v2':
+            self.model = esm_utilities.load_model(
+                model_architecture=configs.encoder.model_name,
+                num_end_adapter_layers=2)
+        # self.pooling_layer = nn.AdaptiveAvgPool2d((None, 1))
+        self.pooling_layer = nn.AdaptiveAvgPool1d(1)
+        self.ParallelLinearDecoders = ParallelLinearDecoders(input_size=self.model.embed_dim, 
+                                                             output_sizes=[1] * configs.encoder.num_classes)
+        self.num_layers = self.model.num_layers
+
+    def forward(self, encoded_sequence):
+        features = self.model(
+            tokens=encoded_sequence, 
+            repr_layers=[self.num_layers])["representations"][self.num_layers]
+        
+        last_hidden_state = features[:,1:-1] #[batch, seq+2, dim]
+        
+        motif_logits = self.ParallelLinearDecoders(last_hidden_state)
+        motif_logits = torch.stack(motif_logits, dim=1).squeeze(-1)
+        return motif_logits
+
+
 class Bothmodels(nn.Module):
     def __init__(self, configs, pretrain_loc, trainable_layers, model_name='facebook/esm2_t33_650M_UR50D', model_type='esm_v2'):
         super().__init__()
@@ -252,6 +290,12 @@ def prepare_models(configs, logfilepath, curdir_path):
                       model_type=configs.encoder.model_type,
                       configs=configs
                       )
+    if configs.encoder.composition=="official_esm_v2":
+        encoder = OfficialEsmEncoder(model_name=configs.encoder.model_name,
+                            model_type=configs.encoder.model_type,
+                            configs=configs
+                            )
+
     elif configs.encoder.composition=="promprot":
         encoder=CustomPromptModel(configs=configs, pretrain_loc=os.path.join(curdir_path, "PromptProtein", "PromptProtein.pt"), trainable_layers=["layers.32", "emb_layer_norm_after"])
     elif configs.encoder.composition=="both":

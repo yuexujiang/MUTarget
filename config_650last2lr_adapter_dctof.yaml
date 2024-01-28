@@ -11,7 +11,7 @@ resume:
 encoder:
   composition: official_esm_v2 # esm_v2, promprot, both
   model_type: official_esm_v2 # esm_v2, t5
-  model_name:  esm2_t6_8M_UR50D # facebook/esm2_t33_650M_UR50D, facebook/esm2_t30_150M_UR50D, facebook/esm2_t12_35M_UR50D, facebook/esm2_t6_8M_UR50D, Rostlab/prot_t5_base_mt_uniref50
+  model_name:  esm2_t6_8M_UR50D # esm2_t33_650M_UR50D, esm2_t30_150M_UR50D, esm2_t12_35M_UR50D, esm2_t6_8M_UR50D, prot_t5_base_mt_uniref50
   max_len: 602  #602
   num_classes: 8
   prm4prmpro: ppi

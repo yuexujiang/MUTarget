@@ -16,7 +16,7 @@ pd.set_option('display.max_columns', None)
 
 
 
-def get_prediction(tools, cutoff, n, data_dict):
+def get_prediction(n, data_dict):
     s=len(data_dict.keys())
     result_pro=np.zeros([s,n])
     motif_pred = [{} for i in range(n)]
@@ -59,6 +59,29 @@ def frag2protein_pred(data_dict, tools):
         data_dict[id_protein]['motif_logits_protein']=motif_logits_protein
     return data_dict
 
+def present(tools, result_pro, motif_pred, result_id):
+    classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
+             "SIGNAL", "chloroplast", "Thylakoid"]
+    output_file = os.path.join(tools['result_path'],"prediction_results.txt")
+    logfile=open(output_file, "w")
+
+    cutoffs = list(tools["cutoffs"])
+    result_bool = np.zeros_like(result_pro)
+    for j in range(result_pro.shape[1]):
+        result_bool[:,j] = result_pro[:,j]>cutoffs[j]
+    for i in range(len(result_id)):
+        id = result_id[i]
+        logfile.write(id+"\n")
+        pro_pred = result_bool[i]
+        pred = np.where(pro_pred==1)[0]
+        if pred.size == 0:
+            logfile.write("Other\n")
+        else:
+            for j in pred:
+                logfile.write(classname[j]+"\n")
+                logfile.write(str(motif_pred[j][id]>cutoffs[j])+"\n")
+    logfile.close()
+
 def predict(dataloader, tools):
     # Set the model to evaluation mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
@@ -66,9 +89,7 @@ def predict(dataloader, tools):
     tools['net'].eval().to(tools["pred_device"])
     n=tools['num_classes']
 
-    
-
-    cutoff = tools['cutoff']
+    # cutoff = tools['cutoff']
     data_dict={}
     with torch.no_grad():
         for batch, (id, seq_frag) in enumerate(dataloader):
@@ -99,27 +120,29 @@ def predict(dataloader, tools):
 
         data_dict = frag2protein_pred(data_dict, tools)
 
-        result_pro, motif_pred, result_id = get_prediction(tools, cutoff, n, data_dict)  # result_pro = [sample_size, class_num], sample order same as result_id  
+        result_pro, motif_pred, result_id = get_prediction(n, data_dict)  # result_pro = [sample_size, class_num], sample order same as result_id  
                                                                                          # motif_pred = class_num dictionaries with protein id as keys
                                                                                          # result_id = [sample_size], protein ids
         
-        classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-             "SIGNAL", "chloroplast", "Thylakoid"]
-        output_file = os.path.join(tools['result_path'],"prediction_results.txt")
-        logfile=open(output_file, "w")
-        result_bool= result_pro>0.5
-        for i in range(len(result_id)):
-            id = result_id[i]
-            logfile.write(id+"\n")
-            pro_pred = result_bool[i]
-            pred = np.where(pro_pred==1)[0]
-            if pred.size == 0:
-                logfile.write("Other\n")
-            else:
-                for j in pred:
-                    logfile.write(classname[j]+"\n")
-                    logfile.write(str(motif_pred[j][id]>0.5)+"\n")
-        logfile.close()
+        present(tools, result_pro, motif_pred, result_id)
+
+        # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
+        #      "SIGNAL", "chloroplast", "Thylakoid"]
+        # output_file = os.path.join(tools['result_path'],"prediction_results.txt")
+        # logfile=open(output_file, "w")
+        # result_bool= result_pro>0.5
+        # for i in range(len(result_id)):
+        #     id = result_id[i]
+        #     logfile.write(id+"\n")
+        #     pro_pred = result_bool[i]
+        #     pred = np.where(pro_pred==1)[0]
+        #     if pred.size == 0:
+        #         logfile.write("Other\n")
+        #     else:
+        #         for j in pred:
+        #             logfile.write(classname[j]+"\n")
+        #             logfile.write(str(motif_pred[j][id]>0.5)+"\n")
+        # logfile.close()
 
 
         
@@ -151,6 +174,8 @@ def split_protein_sequence_pred(sequence, configs):
             end = sequence_length
         fragment = sequence[start:end]
         fragments.append(fragment)
+        if start + fragment_length > sequence_length:
+            break
         start += fragment_length - overlap
 
     return fragments
@@ -221,7 +246,7 @@ def main(config_dict, input_file, output_dir, model_dir):
 
     tools = {
         'frag_overlap': configs.encoder.frag_overlap,
-        'cutoff': configs.valid_settings.cutoff,
+        'cutoffs': configs.predict_settings.cutoffs,
         'composition': configs.encoder.composition, 
         'max_len': configs.encoder.max_len,
         'tokenizer': tokenizer,

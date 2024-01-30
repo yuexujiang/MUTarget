@@ -17,26 +17,29 @@ encoder:
   prm4prmpro: ppi
   frag_overlap: 200
 
-PEFT: PFT # FT, PFT, frozen, lora, PromT
+PEFT: lora # FT, PFT, frozen, lora, PromT
 
 train_settings:
-  num_epochs: 5
+  num_epochs: 1
   shuffle: True
   device: cuda
   batch_size: 16
   grad_accumulation: 1
-  loss_pos_weight: 20
+  loss_pos_weight: 15
+  dataset: v2 # v2, v3
+  fine_tune_lr: -3 # -1, -2, -3
 
 
 valid_settings:
   do_every: 1
   batch_size: 16
   device: cuda
-  cutoff: 0.5
+
 
 predict_settings:
   batch_size: 16
   device: cpu
+  cutoffs: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
 
 optimizer:
   name: adam
@@ -53,3 +56,4 @@ optimizer:
     min_lr: 1e-5
     gamma: 0.2
     num_restarts: 1
+  mode: skip #skip, cosine

@@ -121,7 +121,7 @@ def prepare_esm_model(model_name, configs):
         config = LoraConfig(target_modules=["query", "key"])
         model = get_peft_model(model, config)
         # Allow the parameters of the last transformer block to be updated during fine-tuning
-        for param in model.encoder.layer[-1].parameters():
+        for param in model.encoder.layer[configs.train_settings.fine_tune_lr:].parameters():
             param.requires_grad = True
         for param in model.pooler.parameters():
             param.requires_grad = False
@@ -139,7 +139,7 @@ def prepare_esm_model(model_name, configs):
             param.requires_grad = False
     elif configs.PEFT == "PFT":
         # Allow the parameters of the last transformer block to be updated during fine-tuning
-        for param in model.encoder.layer[-1].parameters():
+        for param in model.encoder.layer[configs.train_settings.fine_tune_lr:].parameters():
             param.requires_grad = True
         for param in model.pooler.parameters():
             param.requires_grad = False
@@ -155,6 +155,21 @@ class ParallelLinearDecoders(nn.Module):
     def forward(self, x):
         decoder_outputs = [decoder(x) for decoder in self.linear_decoders]
         return decoder_outputs
+
+def remove_s_e_token(target_tensor, mask_tensor):  # target_tensor [batch, seq+2, ...]  =>  [batch, seq, ...]
+    # mask_tensor=inputs['attention_mask']
+    # input_tensor=inputs['input_ids']
+    result=[]
+    for i in range(mask_tensor.size()[0]):
+        ind=torch.where(mask_tensor[i]==0)[0]
+        if ind.size()[0]==0:
+            result.append(target_tensor[i][1:-1])
+        else:
+            eos_ind=ind[0].item()-1
+            result.append(torch.concatenate((target_tensor[i][1:eos_ind], target_tensor[i][eos_ind+1:]), axis=0))
+    
+    new_tensor=torch.stack(result,axis=0)
+    return new_tensor
 
 class Encoder(nn.Module):
     def __init__(self, configs, model_name='facebook/esm2_t33_650M_UR50D', model_type='esm_v2'):
@@ -176,7 +191,8 @@ class Encoder(nn.Module):
         # self.device=configs.train_settings.device
     def forward(self, encoded_sequence):
         features = self.model(input_ids=encoded_sequence['input_ids'], attention_mask=encoded_sequence['attention_mask'],output_attentions=True)
-        last_hidden_state = features.last_hidden_state[:,1:-1] #[batch, seq+2, dim]
+        # last_hidden_state = features.last_hidden_state[:,1:-1] #[batch, seq, dim]
+        last_hidden_state = remove_s_e_token(features.last_hidden_state, encoded_sequence['attention_mask']) #[batch, seq, dim]
         # print(last_hidden_state.size())
         # attention_mask = encoded_sequence['attention_mask'].repeat_interleave(encoded_sequence['attention_mask'].size(1), dim=0).reshape(
         #     -1, encoded_sequence['attention_mask'].size(1), encoded_sequence['attention_mask'].size(1))
@@ -206,7 +222,7 @@ class Encoder(nn.Module):
         #     motif_logits.append(logits[:,1:-1])
             
 
-        motif_logits = torch.stack(motif_logits, dim=1).squeeze(-1)
+        motif_logits = torch.stack(motif_logits, dim=1).squeeze(-1) #[batch, num_class, seq]
         # print(motif_logits.size())
         
 

@@ -68,16 +68,19 @@ def prepare_saving_dir(configs):
 
 def prepare_optimizer(net, configs, num_train_samples, logfilepath):
     optimizer, scheduler = load_opt(net, configs)
-    if scheduler is None:
-        scheduler = CosineAnnealingWarmupRestarts(
-            optimizer,
-            first_cycle_steps=np.ceil(
-                num_train_samples / configs.train_settings.grad_accumulation) * configs.train_settings.num_epochs / configs.optimizer.decay.num_restarts,
-            cycle_mult=1.0,
-            max_lr=configs.optimizer.lr,
-            min_lr=configs.optimizer.decay.min_lr,
-            warmup_steps=configs.optimizer.decay.warmup,
-            gamma=configs.optimizer.decay.gamma)
+    if configs.optimizer.mode == "skip":
+        scheduler = None
+    else:
+        if scheduler is None:
+            scheduler = CosineAnnealingWarmupRestarts(
+                optimizer,
+                first_cycle_steps=np.ceil(
+                    num_train_samples / configs.train_settings.grad_accumulation) * configs.train_settings.num_epochs / configs.optimizer.decay.num_restarts,
+                cycle_mult=1.0,
+                max_lr=configs.optimizer.lr,
+                min_lr=configs.optimizer.decay.min_lr,
+                warmup_steps=configs.optimizer.decay.warmup,
+                gamma=configs.optimizer.decay.gamma)
     return optimizer, scheduler
 
 

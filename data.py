@@ -2,7 +2,7 @@
 import torch
 torch.manual_seed(0)
 from torch.utils.data import Dataset
-from torchvision.transforms import ToTensor, Lambda
+# from torchvision.transforms import ToTensor, Lambda
 import numpy as np
 from torch.utils.data import DataLoader, random_split
 from utils import calculate_class_weights
@@ -100,6 +100,8 @@ def split_protein_sequence(sequence, targets, configs):
             target_frag =  np.concatenate((target_frag, pad),axis=1)
         target_frags.append(target_frag)
         fragments.append(fragment)
+        if start + fragment_length > sequence_length:
+            break
         start += fragment_length - overlap
 
     return fragments, target_frags
@@ -146,11 +148,16 @@ def prepare_samples(csv_file, configs):
 
 def prepare_dataloaders(configs, valid_batch_number, test_batch_number):
     # id_to_seq = prot_id_to_seq(seq_file)
-    samples = prepare_samples("./parsed_EC7_v2/PLANTS_uniprot.csv",configs)
-    samples.extend(prepare_samples("./parsed_EC7_v2/ANIMALS_uniprot.csv", configs))
-    samples.extend(prepare_samples("./parsed_EC7_v2/FUNGI_uniprot.csv", configs))
-
-    cv=pd.read_csv("./parsed_EC7_v2/split/type/partition.csv")
+    if configs.train_settings.dataset == 'v2':
+        samples = prepare_samples("./parsed_EC7_v2/PLANTS_uniprot.csv",configs)
+        samples.extend(prepare_samples("./parsed_EC7_v2/ANIMALS_uniprot.csv", configs))
+        samples.extend(prepare_samples("./parsed_EC7_v2/FUNGI_uniprot.csv", configs))
+        cv=pd.read_csv("./parsed_EC7_v2/split/type/partition.csv")
+    elif configs.train_settings.dataset == 'v3':
+        samples = prepare_samples("./parsed_EC7_v3/PLANTS_uniprot.csv",configs)
+        samples.extend(prepare_samples("./parsed_EC7_v3/ANIMALS_uniprot.csv", configs))
+        samples.extend(prepare_samples("./parsed_EC7_v3/FUNGI_uniprot.csv", configs))
+        cv=pd.read_csv("./parsed_EC7_v3/split/type/partition.csv")
     train_id=[]
     val_id=[]
     test_id=[]

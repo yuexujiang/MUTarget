@@ -25,35 +25,33 @@ def loss_fix(id_frag, motif_logits, target_frag, tools):
     for i in range(len(id_frag)):
         frag_ind = id_frag[i].split('@')[1]
         target_thylakoid = target_frag[i,-1]  # -1 for Thylakoid, [seq]; -2 for chloroplast
-        label_first = target_thylakoid[0] # 1 or 0
+        # label_first = target_thylakoid[0] # 1 or 0
         target_chlo = target_frag[i,-2]
-        if frag_ind == '0' and label_first == 1:
-            # print("case1")
-            l=int(torch.sum(target_thylakoid).item())
-            # pred_thylakoid = motif_logits[i,-1,:(l-1)]
-            true_thylakoid = target_frag[i,-1,:(l-1)] == 1
-            false_thylakoid = target_frag[i,-1,:(l-1)] == 0
-            # target_frag[i,-1,:(l-1)] = pred_thylakoid
-            motif_logits[i,-1,:(l-1)][true_thylakoid] = 100
-            motif_logits[i,-1,:(l-1)][false_thylakoid] = -100
-            # pred_chlo = motif_logits[i,-2,:(l-1)]
+        if frag_ind == '0' and torch.max(target_chlo)==0 and torch.max(target_thylakoid)==1:
+            # print("case2")
+            l=torch.where(target_thylakoid==1)[0][0]
             true_chlo = target_frag[i,-2,:(l-1)] == 1
             false_chlo = target_frag[i,-2,:(l-1)] == 0
-            # target_frag[i,-2,:(l-1)] = pred_chlo
             motif_logits[i,-2,:(l-1)][true_chlo] = 100
             motif_logits[i,-2,:(l-1)][false_chlo] = -100
-            # fixed_loss += tools['loss_function'](pred_thylakoid, label_thylakoid.to(tools['train_device'])).item()
-            # fixed_loss += tools['loss_function'](pred_chlo, label_chlo.to(tools['train_device'])).item()
-        elif frag_ind == '0' and torch.max(target_thylakoid)>0 and label_first == 0 and torch.max(target_chlo)==0:
-            # print("case2")
-            right_end = torch.where(target_thylakoid==1)[0][0]
-            target_frag[i,-2][:right_end] = 1
     # return fixed_loss
     # return target_frag
     return motif_logits, target_frag
 
 
 
+def make_buffer(id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple):
+    id_frags_list = []
+    seq_frag_list = []
+    target_frag_list = []
+    for i in range(len(id_frag_list_tuple)):
+        id_frags_list.extend(id_frag_list_tuple[i])
+        seq_frag_list.extend(seq_frag_list_tuple[i])
+        target_frag_list.extend(target_frag_nplist_tuple[i])
+    seq_frag_tuple = tuple(seq_frag_list)
+    target_frag_pt = torch.from_numpy(np.stack(target_frag_list, axis=0))
+    type_protein_pt = torch.stack(list(type_protein_pt_tuple), axis=0)
+    return id_frags_list, seq_frag_tuple, target_frag_pt, type_protein_pt
 
 
 def train_loop(tools):
@@ -75,41 +73,26 @@ def train_loop(tools):
     # Unnecessary in this situation but added for best practices
     # model.train().cuda()
     tools['net'].train().to(tools['train_device'])
-    for batch, (id, seq_frag, target_frag, sample_weight) in enumerate(tools['train_loader']):
+    for batch, (id_tuple, id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple, sample_weight_tuple) in enumerate(tools['train_loader']):
+        id_frags_list, seq_frag_tuple, target_frag_pt, type_protein_pt = make_buffer(id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple)
         with autocast():
             # Compute prediction and loss
-            encoded_seq=tokenize(tools, seq_frag)
+            encoded_seq=tokenize(tools, seq_frag_tuple)
             if type(encoded_seq)==dict:
                 for k in encoded_seq.keys():
                     encoded_seq[k]=encoded_seq[k].to(tools['train_device'])
             else:
                 encoded_seq=encoded_seq.to(tools['train_device'])
-            motif_logits = tools['net'](encoded_seq)
-            # if cs_probab.size()[1]<200:
-            #     zero_pad=200-cs_probab.size()[1]
-            #     additional_elements = torch.zeros([cs_probab.size()[0],zero_pad]).to(tools['train_device'])
-            #     cs_probab = torch.cat((cs_probab, additional_elements), dim=1)
-            # elif cs_probab.size()[1]>200:
-            #     cs_probab = cs_probab[:,:200]
-
-            # w=torch.ones([9,1,1])*5
-            # print("before:")
-            # weighted_loss_sum = tools['loss_function'](motif_logits, target_frag.to(tools['train_device']))
-            # print(weighted_loss_sum)
-            # print("after:")
-
-            motif_logits, target_frag = loss_fix(id, motif_logits, target_frag, tools)
-            weighted_loss_sum = tools['loss_function'](motif_logits, target_frag.to(tools['train_device']))
-            # print(weighted_loss_sum)
+            classification_head, motif_logits = tools['net'](encoded_seq, id_tuple, id_frags_list, seq_frag_tuple)
 
 
-            # losses=[]
-            # for head in range(motif_logits.size()[1]):
-            #     loss = tools['loss_function'](motif_logits[:, head, :], target_frag[:,head].to(tools['train_device']))
-            #     weighted_loss = loss * sample_weight.unsqueeze(1).to(tools['train_device'])
-            #     losses.append(torch.mean(weighted_loss))
-            
-            # weighted_loss_sum = sum(losses)
+            motif_logits, target_frag = loss_fix(id_frags_list, motif_logits, target_frag_pt, tools)
+            # print(tools['loss_function_pro'](classification_head, type_protein_pt.to(tools['train_device'])).size())
+            # print(torch.from_numpy(np.array(sample_weight_tuple)).to(tools['train_device']).size())
+            sample_weight_pt = torch.from_numpy(np.array(sample_weight_tuple)).to(tools['train_device']).unsqueeze(1)
+            weighted_loss_sum = tools['loss_function'](motif_logits, target_frag.to(tools['train_device']))+\
+                torch.mean(tools['loss_function_pro'](classification_head, type_protein_pt.to(tools['train_device'])) * sample_weight_pt)
+
             train_loss += weighted_loss_sum.item()
 
         # Backpropagation
@@ -118,7 +101,7 @@ def train_loop(tools):
         scaler.update()
         tools['scheduler'].step()
         if batch % 30 == 0:
-            loss, current = weighted_loss_sum.item(), (batch + 1) * len(seq_frag)
+            loss, current = weighted_loss_sum.item(), (batch + 1) * len(id_tuple)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
             customlog(tools["logfilepath"], f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]\n")
     # epoch_acc = accuracy.compute().cpu().item()
@@ -171,23 +154,23 @@ def test_loop(tools, dataloader):
     # Evaluating the model with torch.no_grad() ensures that no gradients are computed during test mode
     # also serves to reduce unnecessary gradient computations and memory usage for tensors with requires_grad=True
     with torch.no_grad():
-        for batch, (id, seq_frag, target_frag, sample_weight) in enumerate(dataloader):
-            encoded_seq=tokenize(tools, seq_frag)
+        for batch, (id_tuple, id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple, sample_weight_tuple) in enumerate(dataloader):
+            id_frags_list, seq_frag_tuple, target_frag_pt, type_protein_pt = make_buffer(id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple)
+            encoded_seq=tokenize(tools, seq_frag_tuple)
             if type(encoded_seq)==dict:
                 for k in encoded_seq.keys():
                     encoded_seq[k]=encoded_seq[k].to(tools['valid_device'])
             else:
                 encoded_seq=encoded_seq.to(tools['valid_device'])
-            motif_logits = tools["net"](encoded_seq)
-            # if cs_probab.size()[1]<200:
-            #     zero_pad=200-cs_probab.size()[1]
-            #     additional_elements = torch.zeros([cs_probab.size()[0],zero_pad]).to(tools['train_device'])
-            #     cs_probab = torch.cat((cs_probab, additional_elements), dim=1)
-            # elif cs_probab.size()[1]>200:
-            #     cs_probab = cs_probab[:,:200]
+            classification_head, motif_logits = tools['net'](encoded_seq, id_tuple, id_frags_list, seq_frag_tuple)
             
-            motif_logits, target_frag = loss_fix(id, motif_logits, target_frag, tools)
-            weighted_loss_sum = tools['loss_function'](motif_logits, target_frag.to(tools['train_device']))
+            motif_logits, target_frag = loss_fix(id_frags_list, motif_logits, target_frag_pt, tools)
+            sample_weight_pt = torch.from_numpy(np.array(sample_weight_tuple)).to(tools['valid_device']).unsqueeze(1)
+            weighted_loss_sum = tools['loss_function'](motif_logits, target_frag.to(tools['valid_device']))+\
+                torch.mean(tools['loss_function_pro'](classification_head, type_protein_pt.to(tools['valid_device'])) * sample_weight_pt)
+            
+                # tools['loss_function_pro'](classification_head, type_protein_pt.to(tools['train_device']))
+            
             # losses=[]
             # for head in range(motif_logits.size()[1]):
             #     loss = tools['loss_function'](motif_logits[:, head, :], target_frag[:,head].to(tools['valid_device']))
@@ -275,7 +258,7 @@ def frag2protein(data_dict, tools):
         id_frag_list = data_dict[id_protein]['id_frag']
         seq_protein=""
         motif_logits_protein=np.array([])
-        target_protein=np.array([])
+        motif_target_protein=np.array([])
         for i in range(len(id_frag_list)):
             id_frag = id_protein+"@"+str(i)
             ind = id_frag_list.index(id_frag)
@@ -286,15 +269,16 @@ def frag2protein(data_dict, tools):
             if i==0:
                 seq_protein=seq_frag
                 motif_logits_protein=motif_logits_frag[:,:l]
-                target_protein=target_frag[:,:l]
+                motif_target_protein=target_frag[:,:l]
             else:
                 seq_protein = seq_protein + seq_frag[overlap:]
-                x_overlap = np.maximum(motif_logits_protein[:,-overlap:], motif_logits_frag[:,:overlap])
+                # x_overlap = np.maximum(motif_logits_protein[:,-overlap:], motif_logits_frag[:,:overlap])
+                x_overlap = (motif_logits_protein[:,-overlap:] + motif_logits_frag[:,:overlap])/2
                 motif_logits_protein = np.concatenate((motif_logits_protein[:,:-overlap], x_overlap, motif_logits_frag[:,overlap:l]),axis=1)
-                target_protein = np.concatenate((target_protein, target_frag[:,overlap:l]), axis=1)
+                motif_target_protein = np.concatenate((motif_target_protein, target_frag[:,overlap:l]), axis=1)
         data_dict[id_protein]['seq_protein']=seq_protein
         data_dict[id_protein]['motif_logits_protein']=motif_logits_protein
-        data_dict[id_protein]['target_protein']=target_protein
+        data_dict[id_protein]['motif_target_protein']=motif_target_protein
     return data_dict
 
 def evaluate_protein(dataloader, tools):
@@ -307,47 +291,53 @@ def evaluate_protein(dataloader, tools):
     tools['net'].eval().to(tools["valid_device"])
     n=tools['num_classes']
 
-    
-
     # cutoff = tools['cutoff']
     data_dict={}
     with torch.no_grad():
-        for batch, (id, seq_frag, target_frag, sample_weight) in enumerate(dataloader):
-            
-            encoded_seq=tokenize(tools, seq_frag)
+        # for batch, (id, id_frags, seq_frag, target_frag, type_protein) in enumerate(dataloader):
+        for batch, (id_tuple, id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple, sample_weight_tuple) in enumerate(dataloader):
+            # id_frags_list, seq_frag_tuple, target_frag_tuple = make_buffer(id_frags, seq_frag, target_frag)
+            id_frags_list, seq_frag_tuple, target_frag_pt, type_protein_pt = make_buffer(id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple)
+            encoded_seq=tokenize(tools, seq_frag_tuple)
             if type(encoded_seq)==dict:
                 for k in encoded_seq.keys():
                     encoded_seq[k]=encoded_seq[k].to(tools['valid_device'])
             else:
                 encoded_seq=encoded_seq.to(tools['valid_device'])
-            motif_logits = tools["net"](encoded_seq)
+            classification_head, motif_logits = tools['net'](encoded_seq, id_tuple, id_frags_list, seq_frag_tuple)
             m=torch.nn.Sigmoid()
             motif_logits = m(motif_logits)
+            classification_head = m(classification_head)
 
-            x = np.array(motif_logits.cpu())   #[batch, head, seq]
-            y = np.array(target_frag.cpu())    #[batch, head, seq]
-            for i in range(len(id)):
-                id_protein=id[i].split('@')[0]
+            x_frag = np.array(motif_logits.cpu())   #[batch, head, seq]
+            y_frag = np.array(target_frag_pt.cpu())    #[batch, head, seq]
+            x_pro = np.array(classification_head.cpu()) #[sample, n]
+            y_pro = np.array(type_protein_pt.cpu()) #[sample, n]
+            for i in range(len(id_frags_list)):
+                id_protein=id_frags_list[i].split('@')[0]
+                j= id_tuple.index(id_protein)
                 if id_protein in data_dict.keys():
-                    data_dict[id_protein]['id_frag'].append(id[i])
-                    data_dict[id_protein]['seq_frag'].append(seq_frag[i])
-                    data_dict[id_protein]['target_frag'].append(y[i])     #[[head, seq], ...]
-                    data_dict[id_protein]['motif_logits'].append(x[i])    #[[head, seq], ...]
+                    data_dict[id_protein]['id_frag'].append(id_frags_list[i])
+                    data_dict[id_protein]['seq_frag'].append(seq_frag_tuple[i])
+                    data_dict[id_protein]['target_frag'].append(y_frag[i])     #[[head, seq], ...]
+                    data_dict[id_protein]['motif_logits'].append(x_frag[i])    #[[head, seq], ...]
                 else:
                     data_dict[id_protein]={}
-                    data_dict[id_protein]['id_frag']=[id[i]]
-                    data_dict[id_protein]['seq_frag']=[seq_frag[i]]
-                    data_dict[id_protein]['target_frag']=[y[i]]
-                    data_dict[id_protein]['motif_logits']=[x[i]]
+                    data_dict[id_protein]['id_frag']=[id_frags_list[i]]
+                    data_dict[id_protein]['seq_frag']=[seq_frag_tuple[i]]
+                    data_dict[id_protein]['target_frag']=[y_frag[i]]
+                    data_dict[id_protein]['motif_logits']=[x_frag[i]]
+                    data_dict[id_protein]['type_pred']=x_pro[j]
+                    data_dict[id_protein]['type_target']=y_pro[j]
 
         data_dict = frag2protein(data_dict, tools)
 
-        IoU_difcut=np.zeros([n, 9])
-        FDR_frag_difcut=np.zeros([1,9])
-        IoU_pro_difcut=np.zeros([n, 9])
-        FDR_pro_difcut=np.zeros([1,9])
+        # IoU_difcut=np.zeros([n, 9])
+        # FDR_frag_difcut=np.zeros([1,9])
+        IoU_pro_difcut=np.zeros([n, 9])  #just for nuc and nuc_export
+        # FDR_pro_difcut=np.zeros([1,9])
         result_pro_difcut=np.zeros([n,6,9])
-        cs_acc_difcut=np.zeros([n, 9])
+        cs_acc_difcut=np.zeros([n, 9]) 
         classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
              "SIGNAL", "chloroplast", "Thylakoid"]
         criteria=["roc_auc_score", "average_precision_score", "matthews_corrcoef",
@@ -357,13 +347,13 @@ def evaluate_protein(dataloader, tools):
         cut_dim=0
         for cutoff in cutoffs:
             scores=get_scores(tools, cutoff, n, data_dict)
-            IoU_difcut[:,cut_dim]=scores['IoU']
+            # IoU_difcut[:,cut_dim]=scores['IoU']
             # IoU_difcut[:,cut_dim]=np.array([float("{:.3f}".format(i)) for i in scores['IoU']])
-            FDR_frag_difcut[:,cut_dim]=scores['FDR_frag']
+            # FDR_frag_difcut[:,cut_dim]=scores['FDR_frag']
             # FDR_frag_difcut[:,cut_dim]=float("{:.3f}".format(scores['FDR_frag']))
             IoU_pro_difcut[:,cut_dim]=scores['IoU_pro']
             # IoU_pro_difcut[:,cut_dim]=np.array([float("{:.3f}".format(i)) for i in scores['IoU_pro']])
-            FDR_pro_difcut[:,cut_dim]=scores['FDR_pro']
+            # FDR_pro_difcut[:,cut_dim]=scores['FDR_pro']
             # FDR_pro_difcut[:,cut_dim]=float("{:.3f}".format(scores['FDR_pro']))
             result_pro_difcut[:,:,cut_dim]=scores['result_pro']
             # result_pro_difcut[:,:,cut_dim]=np.array([float("{:.3f}".format(i)) for i in scores['result_pro'].reshape(-1)]).reshape(scores['result_pro'].shape)
@@ -374,26 +364,26 @@ def evaluate_protein(dataloader, tools):
         # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
         #          "dual", "SIGNAL", "chloroplast", "Thylakoid"]
         
-        customlog(tools["logfilepath"], f" Jaccard Index (fragment): \n")
-        IoU_difcut=pd.DataFrame(IoU_difcut,columns=cutoffs,index=classname)
-        customlog(tools["logfilepath"], IoU_difcut.__repr__())
-        # IoU_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t") 
-        customlog(tools["logfilepath"], f"===========================================\n")
-        customlog(tools["logfilepath"], f" FDR (fragment): \n")
-        FDR_frag_difcut=pd.DataFrame(FDR_frag_difcut,columns=cutoffs)
-        customlog(tools["logfilepath"], FDR_frag_difcut.__repr__())
-        # FDR_frag_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t")
-        customlog(tools["logfilepath"], f"===========================================\n")
+        # customlog(tools["logfilepath"], f" Jaccard Index (fragment): \n")
+        # IoU_difcut=pd.DataFrame(IoU_difcut,columns=cutoffs,index=classname)
+        # customlog(tools["logfilepath"], IoU_difcut.__repr__())
+        # # IoU_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t") 
+        # customlog(tools["logfilepath"], f"===========================================\n")
+        # customlog(tools["logfilepath"], f" FDR (fragment): \n")
+        # FDR_frag_difcut=pd.DataFrame(FDR_frag_difcut,columns=cutoffs)
+        # customlog(tools["logfilepath"], FDR_frag_difcut.__repr__())
+        # # FDR_frag_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t")
+        # customlog(tools["logfilepath"], f"===========================================\n")
         customlog(tools["logfilepath"], f" Jaccard Index (protein): \n")
         IoU_pro_difcut=pd.DataFrame(IoU_pro_difcut,columns=cutoffs,index=classname)
         customlog(tools["logfilepath"], IoU_pro_difcut.__repr__())
         # IoU_pro_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t")
         customlog(tools["logfilepath"], f"===========================================\n")
-        customlog(tools["logfilepath"], f" FDR (protein): \n")
-        FDR_pro_difcut=pd.DataFrame(FDR_pro_difcut,columns=cutoffs)
-        customlog(tools["logfilepath"], FDR_pro_difcut.__repr__())
+        # customlog(tools["logfilepath"], f" FDR (protein): \n")
+        # FDR_pro_difcut=pd.DataFrame(FDR_pro_difcut,columns=cutoffs)
+        # customlog(tools["logfilepath"], FDR_pro_difcut.__repr__())
 
-        customlog(tools["logfilepath"], f"===========================================\n")
+        # customlog(tools["logfilepath"], f"===========================================\n")
         customlog(tools["logfilepath"], f" cs acc: \n")
         cs_acc_difcut=pd.DataFrame(cs_acc_difcut,columns=cutoffs,index=classname)
         customlog(tools["logfilepath"], cs_acc_difcut.__repr__())
@@ -406,136 +396,51 @@ def evaluate_protein(dataloader, tools):
             customlog(tools["logfilepath"], tem.__repr__())
             # tem.to_csv(tools["logfilepath"],mode='a',sep="\t")
 
-    
 
-    
-            # for head in range(motif_logits.size()[1]):
-            #     x = np.array(motif_logits[:, head, :].cpu())
-            #     y = np.array(target_frag[:,head].cpu())
-            #     Negtive_num += sum(np.max(y, axis=1)==0)
-            #     Negtive_detect_num += sum((np.max(y, axis=1)==0) * (np.max(x>=cutoff, axis=1)==1))
-            #     TP_frag[head] += np.sum((x>=cutoff) * (y==1))
-            #     FP_frag[head] += np.sum((x>=cutoff) * (y==0))
-            #     FN_frag[head] += np.sum((x<cutoff) * (y==1))
-
-                
-            
-
-        
-
-        # for head in range(n):
-        #     x_list=[]
-        #     y_list=[]
-        #     for id_protein in data_dict.keys():
-        #         x = np.array(data_dict[id_protein]['motif_logits'])[:,head]   #[frag_num, seq]
-        #         y = np.array(data_dict[id_protein]['target_protein'])[:,head] #[frag_num, seq]
-        #         Negtive_num += sum(np.max(y, axis=1)==0)
-        #         Negtive_detect_num += sum((np.max(y, axis=1)==0) * (np.max(x>=cutoff, axis=1)==1))
-        #         TP_frag[head] += np.sum((x>=cutoff) * (y==1))
-        #         FP_frag[head] += np.sum((x>=cutoff) * (y==0))
-        #         FN_frag[head] += np.sum((x<cutoff) * (y==1))
-
-
-
-
-        #         x = data_dict[id_protein]['motif_logits_protein'][head]  #[seq]
-        #         y = data_dict[id_protein]['target_protein'][head]
-        #         Negtive_pro += np.sum(np.max(y)==0)
-        #         Negtive_detect_pro += np.sum((np.max(y)==0) * (np.max(x>=cutoff)==1))
-        #         TP_pro[head] += np.sum((x>=cutoff) * (y==1))
-        #         FP_pro[head] += np.sum((x>=cutoff) * (y==0))
-        #         FN_pro[head] += np.sum((x<cutoff) * (y==1))
-        #         x_list.append(np.max(x))
-        #         y_list.append(np.max(y))
-        #     pred=np.array(x_list)
-        #     target=np.array(y_list)
-        #     result_pro[head,0] = roc_auc_score(target, pred)
-        #     result_pro[head,1] = average_precision_score(target, pred)
-        #     result_pro[head,2] = matthews_corrcoef(target, pred>=cutoff)
-        #     result_pro[head,3] = recall_score(target, pred>=cutoff)
-        #     result_pro[head,4] = precision_score(target, pred>=cutoff)
-        #     result_pro[head,5] = f1_score(target, pred>=cutoff)
-  
-    
-        # for head in range(n):
-        #     IoU[head] = TP_frag[head] / (TP_frag[head] + FP_frag[head] + FN_frag[head])
-        #     IoU_pro[head] = TP_pro[head] / (TP_pro[head] + FP_pro[head] + FN_pro[head])
-        # FDR_frag = Negtive_detect_num / Negtive_num
-        # FDR_pro = Negtive_detect_pro / Negtive_pro
-
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        # # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-        # #          "dual", "SIGNAL", "chloroplast", "Thylakoid"]
-        # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-        #          "SIGNAL", "chloroplast", "Thylakoid"]
-        # customlog(tools["logfilepath"], f" Jaccard Index (fragment): \n")
-        # for i in range(len(classname)):
-        #     customlog(tools["logfilepath"], classname[i]+ f": {IoU[i]:>5f}\n")
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        # customlog(tools["logfilepath"], f" FDR (fragment): {FDR_frag:>5f}\n")
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        # customlog(tools["logfilepath"], f" Jaccard Index (protein): \n")
-        # for i in range(len(classname)):
-        #     customlog(tools["logfilepath"], classname[i]+ f": {IoU_pro[i]:>5f}\n")
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        # customlog(tools["logfilepath"], f" FDR (protein): {FDR_pro:>5f}\n")
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        # criteria=["roc_auc_score", "average_precision_score", "matthews_corrcoef",
-        #           "recall_score", "precision_score", "f1_score"]
-        # for i in range(len(classname)):
-        #      customlog(tools["logfilepath"], f" Class prediction performance ({classname[i]}): \n")
-        #      for j in range(len(criteria)):
-        #          customlog(tools["logfilepath"], criteria[j]+f": {result_pro[i,j]:>5f}\n")
-        
-        # performance={"IoU":IoU, "FDR_frag":FDR_frag, "IoU_pro":IoU_pro, "FDR_pro":FDR_pro,
-        #              "result_pro":result_pro}
 
 def get_scores(tools, cutoff, n, data_dict):
     cs_num = np.zeros(n)
     cs_correct = np.zeros(n)
     cs_acc = np.zeros(n)
 
-    TP_frag=np.zeros(n)
-    FP_frag=np.zeros(n)
-    FN_frag=np.zeros(n)
-    #Intersection over Union (IoU) or Jaccard Index
-    IoU = np.zeros(n)
-    Negtive_detect_num=0
-    Negtive_num=0
+    # TP_frag=np.zeros(n)
+    # FP_frag=np.zeros(n)
+    # FN_frag=np.zeros(n)
+    # #Intersection over Union (IoU) or Jaccard Index
+    # IoU = np.zeros(n)
+    # Negtive_detect_num=0
+    # Negtive_num=0
 
     TP_pro=np.zeros(n)
     FP_pro=np.zeros(n)
     FN_pro=np.zeros(n)
     IoU_pro = np.zeros(n)
-    Negtive_detect_pro=0
-    Negtive_pro=0
+    # Negtive_detect_pro=0
+    # Negtive_pro=0
     result_pro=np.zeros([n,6])
     for head in range(n):
         x_list=[]
         y_list=[]
         for id_protein in data_dict.keys():
-            x = np.array(data_dict[id_protein]['motif_logits'])[:,head]   #[frag_num, seq]
-            y = np.array(data_dict[id_protein]['target_frag'])[:,head] #[frag_num, seq]
-            Negtive_num += sum(np.max(y, axis=1)==0)
-            Negtive_detect_num += sum((np.max(y, axis=1)==0) * (np.max(x>=cutoff, axis=1)==1))
-            TP_frag[head] += np.sum((x>=cutoff) * (y==1))
-            FP_frag[head] += np.sum((x>=cutoff) * (y==0))
-            FN_frag[head] += np.sum((x<cutoff) * (y==1))
-
-            x = data_dict[id_protein]['motif_logits_protein'][head]  #[seq]
-            y = data_dict[id_protein]['target_protein'][head]
-            Negtive_pro += np.sum(np.max(y)==0)
-            Negtive_detect_pro += np.sum((np.max(y)==0) * (np.max(x>=cutoff)==1))
-            TP_pro[head] += np.sum((x>=cutoff) * (y==1))
-            FP_pro[head] += np.sum((x>=cutoff) * (y==0))
-            FN_pro[head] += np.sum((x<cutoff) * (y==1))
-            x_list.append(np.max(x))
-            y_list.append(np.max(y))
-
-            cs_num[head] += np.sum(y==1)>0
-            if np.sum(y==1)>0:
-                cs_correct[head] += (np.sum(x>=cutoff) == np.sum(y==1))
-
+            x_pro = data_dict[id_protein]['type_pred'][head]  #[1]
+            y_pro = data_dict[id_protein]['type_target'][head]  #[1]   
+            x_list.append(x_pro)  
+            y_list.append(y_pro)
+            if y_pro==1:
+                x_frag = data_dict[id_protein]['motif_logits_protein'][head]  #[seq]
+                y_frag = data_dict[id_protein]['motif_target_protein'][head]
+                # Negtive_pro += np.sum(np.max(y)==0)
+                # Negtive_detect_pro += np.sum((np.max(y)==0) * (np.max(x>=cutoff)==1))
+                TP_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==1))
+                FP_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==0))
+                FN_pro[head] += np.sum((x_frag<cutoff) * (y_frag==1))
+                # x_list.append(np.max(x))
+                # y_list.append(np.max(y))
+    
+                cs_num[head] += np.sum(y_frag==1)>0
+                if np.sum(y_frag==1)>0:
+                    cs_correct[head] += (np.argmax(x_frag) == np.argmax(y_frag))
+              
         pred=np.array(x_list)
         target=np.array(y_list)
         result_pro[head,0] = roc_auc_score(target, pred)
@@ -544,42 +449,15 @@ def get_scores(tools, cutoff, n, data_dict):
         result_pro[head,3] = recall_score(target, pred>=cutoff)
         result_pro[head,4] = precision_score(target, pred>=cutoff)
         result_pro[head,5] = f1_score(target, pred>=cutoff)
-
-
+    
     for head in range(n):
-        IoU[head] = TP_frag[head] / (TP_frag[head] + FP_frag[head] + FN_frag[head])
+        # IoU[head] = TP_frag[head] / (TP_frag[head] + FP_frag[head] + FN_frag[head])
         IoU_pro[head] = TP_pro[head] / (TP_pro[head] + FP_pro[head] + FN_pro[head])
         cs_acc[head] = cs_correct[head] / cs_num[head]
-    FDR_frag = Negtive_detect_num / Negtive_num
-    FDR_pro = Negtive_detect_pro / Negtive_pro
-    # customlog(tools["logfilepath"], f"===========================================\n")
-    # # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-    # #          "dual", "SIGNAL", "chloroplast", "Thylakoid"]
-    # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-    #          "SIGNAL", "chloroplast", "Thylakoid"]
-    # customlog(tools["logfilepath"], f" Jaccard Index (fragment): \n")
-    # for i in range(len(classname)):
-    #     customlog(tools["logfilepath"], classname[i]+ f": {IoU[i]:>5f}\n")
-    # customlog(tools["logfilepath"], f"===========================================\n")
-    # customlog(tools["logfilepath"], f" FDR (fragment): {FDR_frag:>5f}\n")
-    # customlog(tools["logfilepath"], f"===========================================\n")
-    # customlog(tools["logfilepath"], f" Jaccard Index (protein): \n")
-    # for i in range(len(classname)):
-    #     customlog(tools["logfilepath"], classname[i]+ f": {IoU_pro[i]:>5f}\n")
-    # customlog(tools["logfilepath"], f"===========================================\n")
-    # customlog(tools["logfilepath"], f" FDR (protein): {FDR_pro:>5f}\n")
-    # customlog(tools["logfilepath"], f"===========================================\n")
-    # criteria=["roc_auc_score", "average_precision_score", "matthews_corrcoef",
-    #           "recall_score", "precision_score", "f1_score"]
-    # for i in range(len(classname)):
-    #      customlog(tools["logfilepath"], f" Class prediction performance ({classname[i]}): \n")
-    #      for j in range(len(criteria)):
-    #          customlog(tools["logfilepath"], criteria[j]+f": {result_pro[i,j]:>5f}\n")
+    # FDR_frag = Negtive_detect_num / Negtive_num
+    # FDR_pro = Negtive_detect_pro / Negtive_pro
     
-    scores={"IoU":IoU, #[n]
-            "FDR_frag":FDR_frag, #[1]
-            "IoU_pro":IoU_pro, #[n]
-            "FDR_pro":FDR_pro, #[1]
+    scores={"IoU_pro":IoU_pro, #[n]
             "result_pro":result_pro, #[n, 6]
             "cs_acc": cs_acc} #[n]
     return scores
@@ -637,6 +515,8 @@ def main(config_dict, valid_batch_number, test_batch_number):
         'optimizer': optimizer,
         # 'loss_function': torch.nn.CrossEntropyLoss(reduction="none"),
         'loss_function': torch.nn.BCEWithLogitsLoss(pos_weight=w, reduction="mean"),
+        # 'loss_function_pro': torch.nn.BCEWithLogitsLoss(reduction="mean"),
+        'loss_function_pro': torch.nn.BCEWithLogitsLoss(reduction="none"),
         'checkpoints_every': configs.checkpoints_every,
         'scheduler': scheduler,
         'result_path': result_path,

@@ -120,11 +120,6 @@ def prepare_esm_model(model_name, configs):
     if configs.PEFT == "lora":
         config = LoraConfig(target_modules=["query", "key"])
         model = get_peft_model(model, config)
-        # Allow the parameters of the last transformer block to be updated during fine-tuning
-        for param in model.encoder.layer[configs.train_settings.fine_tune_lr:].parameters():
-            param.requires_grad = True
-        for param in model.pooler.parameters():
-            param.requires_grad = False
     # elif configs.PEFT == "PromT":
     #     config = PromptTuningConfig(task_type="SEQ_CLS", prompt_tuning_init=PromptTuningInit.TEXT, num_virtual_tokens=8, 
     #                             prompt_tuning_init_text="Classify what the peptide type of a protein sequence", tokenizer_name_or_path=configs.encoder.model_name)
@@ -138,6 +133,14 @@ def prepare_esm_model(model_name, configs):
         for param in model.parameters():
             param.requires_grad = False
     elif configs.PEFT == "PFT":
+        # Allow the parameters of the last transformer block to be updated during fine-tuning
+        for param in model.encoder.layer[configs.train_settings.fine_tune_lr:].parameters():
+            param.requires_grad = True
+        for param in model.pooler.parameters():
+            param.requires_grad = False
+    elif configs.PEFT == "lora_PFT":
+        config = LoraConfig(target_modules=["query", "key"])
+        model = get_peft_model(model, config)
         # Allow the parameters of the last transformer block to be updated during fine-tuning
         for param in model.encoder.layer[configs.train_settings.fine_tune_lr:].parameters():
             param.requires_grad = True
@@ -181,6 +184,8 @@ class Encoder(nn.Module):
         self.pooling_layer = nn.AdaptiveAvgPool1d(1)
         self.ParallelLinearDecoders = ParallelLinearDecoders(input_size=self.model.config.hidden_size, 
                                                              output_sizes=[1] * configs.encoder.num_classes)
+        self.type_head = nn.Linear(self.model.embeddings.position_embeddings.embedding_dim, configs.encoder.num_classes)
+        self.overlap = configs.encoder.frag_overlap
         # self.mhatt = nn.MultiheadAttention(embed_dim=320, num_heads=10, batch_first=True)
         # self.attheadlist = []
         # self.headlist = []
@@ -189,50 +194,40 @@ class Encoder(nn.Module):
             # self.headlist.append(nn.Linear(320, 1))
         # self.device = device
         # self.device=configs.train_settings.device
-    def forward(self, encoded_sequence):
-        features = self.model(input_ids=encoded_sequence['input_ids'], attention_mask=encoded_sequence['attention_mask'],output_attentions=True)
-        # last_hidden_state = features.last_hidden_state[:,1:-1] #[batch, seq, dim]
-        last_hidden_state = remove_s_e_token(features.last_hidden_state, encoded_sequence['attention_mask']) #[batch, seq, dim]
-        # print(last_hidden_state.size())
-        # attention_mask = encoded_sequence['attention_mask'].repeat_interleave(encoded_sequence['attention_mask'].size(1), dim=0).reshape(
-        #     -1, encoded_sequence['attention_mask'].size(1), encoded_sequence['attention_mask'].size(1))
-        #attention_mask size is [batch, seq+2, seq+2]
-        # attention_mask=attention_mask.to(dtype=torch.float)
-        # motif_logits=[]
-        motif_logits = self.ParallelLinearDecoders(last_hidden_state)
-
-
-        # print(attention_mask.device)
-        # for i in range(9):
-            # attn_output = self.attheadlist[i](query=last_hidden_state, key=last_hidden_state, value=last_hidden_state, 
-            #                                   attn_mask=attention_mask, need_weights=False) #[batch, seq+2, dim]
-            # print(last_hidden_state.device)
-            # logits = self.headlist[i](last_hidden_state).squeeze(dim=-1) #[batch, seq+2]
-            # motif_logits.append(logits[:,1:-1])
-            
-
-        # attn_output, attn_output_weights = self.mhatt(query=last_hidden_state, key=last_hidden_state, value=last_hidden_state, 
-        #                                                   attn_mask=attention_mask, average_attn_weights=False) 
-        # #attn_output_weights = [batch,num_heads,seq+2, seq+2]
-        # motif_logits=[]
-        # for i in range(9):
-        #     head = attn_output_weights[:,i] #[batch,seq+2, seq+2]
-        #     logits = self.pooling_layer(head).squeeze(-1) #[batch,seq+2]
-        #     print(logits[0])
-        #     motif_logits.append(logits[:,1:-1])
-            
-
-        motif_logits = torch.stack(motif_logits, dim=1).squeeze(-1) #[batch, num_class, seq]
-        # print(motif_logits.size())
+    def get_pro_emb(self, id, id_frags_list, seq_frag_tuple, emb_frags, overlap):
+        emb_pro_list=[]
+        for id_protein in id:
+            ind_frag=0
+            id_frag = id_protein+"@"+str(ind_frag)
+            while id_frag in id_frags_list:
+                ind = id_frags_list.index(id_frag)
+                emb_frag = emb_frags[ind]  #[maxlen-2, dim]
+                seq_frag = seq_frag_tuple[ind]
+                l=len(seq_frag)
+                if ind_frag==0:
+                    emb_pro = emb_frag[:l]
+                else:
+                    overlap_emb = (emb_pro[-overlap:] + emb_frag[:overlap])/2
+                    emb_pro = torch.concatenate((emb_pro[:-overlap], overlap_emb, emb_frag[overlap:l]), axis=0)
+                ind_frag+=1
+                id_frag = id_protein+"@"+str(ind_frag)
+            emb_pro = torch.mean(emb_pro, dim=0)
+            emb_pro_list.append(emb_pro)
+        return emb_pro_list
+    def forward(self, encoded_sequence, id, id_frags_list, seq_frag_tuple):  
         
+        features = self.model(input_ids=encoded_sequence['input_ids'], attention_mask=encoded_sequence['attention_mask'])
+        last_hidden_state = remove_s_e_token(features.last_hidden_state, encoded_sequence['attention_mask']) #[batch, maxlen-2, dim]
+        motif_logits = self.ParallelLinearDecoders(last_hidden_state)
+        motif_logits = torch.stack(motif_logits, dim=1).squeeze(-1) #[batch, num_class, maxlen-2]
 
-        # print(encoded_sequence['input_ids'].size())
-        # print(encoded_sequence['attention_mask'].size())
-        # last_layer_attentions = features.attentions[-1]  # [batch, head, seq, seq]
-        # pooled_features = self.pooling_layer(last_layer_attentions).squeeze(-1) # [batch, head, seq]
-        # motif_pred = self.cs_head(pooled_features)
-        # motif_logits = pooled_features[:, 0:9, 1:-1]
-        return motif_logits
+        emb_pro_list = self.get_pro_emb(id, id_frags_list, seq_frag_tuple, last_hidden_state, self.overlap)
+        emb_pro = torch.stack(emb_pro_list, dim=0) #[sample, dim]
+        # transposed_feature = emb_pro.transpose(1, 2)
+        # pooled_features = self.pooling_layer(transposed_feature).squeeze(2) #[sample, dim]
+        classification_head = self.type_head(emb_pro) #[sample, num_class]
+
+        return classification_head, motif_logits
 
 class Bothmodels(nn.Module):
     def __init__(self, configs, pretrain_loc, trainable_layers, model_name='facebook/esm2_t33_650M_UR50D', model_type='esm_v2'):

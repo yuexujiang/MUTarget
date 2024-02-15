@@ -238,6 +238,23 @@ class OfficialEsmEncoder(nn.Module):
             self.model = esm_utilities.load_model(
                 model_architecture=configs.encoder.model_name,
                 num_end_adapter_layers=2)
+
+            for param in self.model.parameters():
+                param.requires_grad = False
+            
+            if configs.PEFT == "Adapter":
+                for name, param in self.model.named_parameters():
+                    if "adapter_layer" in name:
+                        param.requires_grad = True
+            
+            print("**********************************")
+            print("Trainbel parameters:")
+            for name, param in self.model.named_parameters():
+                if param.requires_grad:
+                    print(f"{name}, {str(param.data.shape)}")
+            print("**********************************")
+            # exit(0)
+            
         # self.pooling_layer = nn.AdaptiveAvgPool2d((None, 1))
         self.pooling_layer = nn.AdaptiveAvgPool1d(1)
         self.ParallelLinearDecoders = ParallelLinearDecoders(input_size=self.model.embed_dim, 

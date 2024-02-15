@@ -1,1 +1,4 @@
 __pycache__/
+PromptProtein/models/__pycache__/*.pyc
+PromptProtein/utils/__pycache__/__init__.cpython-38.pyc
+PromptProtein/utils/__pycache__/__init__.cpython-38.pyc

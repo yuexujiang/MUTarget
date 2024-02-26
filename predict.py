@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader, random_split
 import random
 from time import time
+import json
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
@@ -26,7 +27,7 @@ def get_prediction(n, data_dict):
         for id_protein in data_dict.keys():
             x = data_dict[id_protein]['motif_logits_protein'][head]  #[seq]
             motif_pred[head][id_protein]=x
-            x_list.append(np.max(x))
+            x_list.append(data_dict[id_protein]['type_pred'][head])
             if not id_protein in result_id:
                 result_id.append(id_protein)
         
@@ -53,7 +54,7 @@ def frag2protein_pred(data_dict, tools):
                 motif_logits_protein=motif_logits_frag[:,:l]
             else:
                 seq_protein = seq_protein + seq_frag[overlap:]
-                x_overlap = np.maximum(motif_logits_protein[:,-overlap:], motif_logits_frag[:,:overlap])
+                x_overlap = (motif_logits_protein[:,-overlap:] + motif_logits_frag[:,:overlap])/2                
                 motif_logits_protein = np.concatenate((motif_logits_protein[:,:-overlap], x_overlap, motif_logits_frag[:,overlap:l]),axis=1)
         data_dict[id_protein]['seq_protein']=seq_protein
         data_dict[id_protein]['motif_logits_protein']=motif_logits_protein
@@ -82,6 +83,153 @@ def present(tools, result_pro, motif_pred, result_id):
                 logfile.write(str(motif_pred[j][id]>cutoffs[j])+"\n")
     logfile.close()
 
+def fix_pred(result_pro, motif_pred, result_id, cutoffs):
+    ind_thylakoid = -1
+    ind_chlo = -2
+    for i in range(result_pro.shape[0]):
+        id = result_id[i]
+        if result_pro[i,ind_thylakoid]>=cutoffs[ind_thylakoid]:
+            result_pro[i,ind_chlo]=1
+            cs_thy = np.argmax(motif_pred[ind_thylakoid][id])
+            motif_pred[ind_chlo][id][cs_thy:]=0
+    return result_pro, motif_pred
+
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NpEncoder, self).default(obj)
+
+def present2(tools, result_pro, motif_pred, result_id):
+    result={}
+    classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
+             "SIGNAL", "chloroplast", "Thylakoid"]
+    cutoffs = list(tools["cutoffs"])
+
+    result_pro, motif_pred = fix_pred(result_pro, motif_pred, result_id, cutoffs)
+
+    for i in range(len(result_id)):
+        id = result_id[i]
+        seq_len = len(motif_pred[0][id])
+        result[id]={}
+        for j in range(len(classname)):
+            name=classname[j]
+            if result_pro[i,j]<cutoffs[j]:
+                result[id][name]=""
+            else:
+                if name in ["Mitochondrion","SIGNAL", "chloroplast", "Thylakoid"]:
+                    result[id][name]="0-"+ str(np.argmax(motif_pred[j][id]))
+                elif name == "ER":
+                    result[id][name]=str(np.argmax(motif_pred[j][id])) + "-"+ str(seq_len-1)
+                elif name == "Peroxisome":
+                    cs = np.argmax(motif_pred[j][id])
+                    if seq_len-cs > cs:
+                        result[id][name]="0-"+ str(cs)
+                    else:
+                        result[id][name]=str(cs) + "-"+ str(seq_len-1)
+                elif name in ["Nucleus", "Nucleus_export"]:
+                    sites= np.where(motif_pred[j][id]>cutoffs[j])[0]
+                    if len(sites)==0:
+                        site = np.argmax(motif_pred[j][id])
+                        sites = [site]
+                        if site-2>=0:
+                            sites = [site-2, site-1, site]
+                        if site+2<=seq_len-1:
+                            sites = sites.extend([site+1, site+2])
+                    result[id][name]=str(np.array(sites))
+    print(result)
+    json_object = json.dumps(result, indent=2, cls=NpEncoder)
+    output_file = os.path.join(tools['result_path'],"prediction_results.json")
+    with open(output_file, "w") as outfile:
+        outfile.write(json_object)
+
+def present3(tools, result_pro, motif_pred, result_id, data_dict):
+    id2AAscores={}
+    id2label={}
+    classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
+             "SIGNAL", "chloroplast", "Thylakoid"]
+    cutoffs = list(tools["cutoffs"])
+
+    result_pro, motif_pred = fix_pred(result_pro, motif_pred, result_id, cutoffs)
+
+    for i in range(len(result_id)):
+        id = result_id[i]
+        seq = data_dict[id]['seq_protein']
+        seq_len = len(seq)
+        motif_score = np.zeros(seq_len)
+        id2AAscores[id]=motif_score
+        label=""
+        for j in range(len(classname)):
+            name=classname[j]
+            if result_pro[i,j]<cutoffs[j]:
+                continue
+            else:
+                label+="\t"+name
+                score = j+1
+                if name in ["Mitochondrion","SIGNAL", "chloroplast", "Thylakoid"]:
+                    # result[id][name]="0-"+ str(np.argmax(motif_pred[j][id]))
+                    cs = np.argmax(motif_pred[j][id])
+                    for k in range(cs):
+                        if motif_score[k]==0:
+                            motif_score[k]=score
+                elif name == "ER":
+                    # result[id][name]=str(np.argmax(motif_pred[j][id])) + "-"+ str(seq_len-1)
+                    cs = np.argmax(motif_pred[j][id])
+                    motif_score[cs:seq_len]=score
+                elif name == "Peroxisome":
+                    cs = np.argmax(motif_pred[j][id])
+                    if seq_len-cs > cs:
+                        # result[id][name]="0-"+ str(cs)
+                        motif_score[0:cs]=score
+                    else:
+                        # result[id][name]=str(cs) + "-"+ str(seq_len-1)
+                        motif_score[cs:seq_len]=score
+                elif name in ["Nucleus", "Nucleus_export"]:
+                    sites= np.where(motif_pred[j][id]>cutoffs[j])[0]
+                    if len(sites)==0:
+                        site = np.argmax(motif_pred[j][id])
+                        sites = [site]
+                        if site-2>=0:
+                            sites = [site-2, site-1, site]
+                        if site+2<=seq_len-1:
+                            sites = sites.extend([site+1, site+2])
+                    motif_score[sites]=score
+                    # result[id][name]=str(np.array(sites))
+        id2AAscores[id]=motif_score
+        if label=="":
+            label="\tOthers"
+        id2label[id]=label
+    # json_object = json.dumps(result, indent=2, cls=NpEncoder)
+    output_file = os.path.join(tools['result_path'],"prediction_results.txt")
+    with open(output_file, "w") as outfile:
+        # outfile.write(json_object)
+        # for k in result.keys():
+        #     outfile.write(">"+str(k)+"\n")
+        #     outfile.write(str(result[k]))
+        #     outfile.write("\n")
+        for i in range(len(result_id)):
+            id = result_id[i]
+            outfile.write(">"+str(id)+id2label[id]+"\n")
+            outfile.write(str(result_pro[i])+"\n")
+            outfile.write(str(id2AAscores[id]))
+            outfile.write("\n")
+
+
+
+
+def make_buffer_pred(id_frag_list_tuple, seq_frag_list_tuple):
+    id_frags_list = []
+    seq_frag_list = []
+    for i in range(len(id_frag_list_tuple)):
+        id_frags_list.extend(id_frag_list_tuple[i])
+        seq_frag_list.extend(seq_frag_list_tuple[i])
+    seq_frag_tuple = tuple(seq_frag_list)
+    return id_frags_list, seq_frag_tuple
+
 def predict(dataloader, tools):
     # Set the model to evaluation mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
@@ -92,57 +240,49 @@ def predict(dataloader, tools):
     # cutoff = tools['cutoff']
     data_dict={}
     with torch.no_grad():
-        for batch, (id, seq_frag) in enumerate(dataloader):
-            
-            encoded_seq=tokenize(tools, seq_frag)
+        for batch, (id_tuple, id_frag_list_tuple, seq_frag_list_tuple) in enumerate(dataloader):
+            print(1)
+            id_frags_list, seq_frag_tuple = make_buffer_pred(id_frag_list_tuple, seq_frag_list_tuple)
+            encoded_seq=tokenize(tools, seq_frag_tuple)
             if type(encoded_seq)==dict:
                 for k in encoded_seq.keys():
                     encoded_seq[k]=encoded_seq[k].to(tools['pred_device'])
             else:
                 encoded_seq=encoded_seq.to(tools['pred_device'])
-            motif_logits = tools["net"](encoded_seq)
+
+            classification_head, motif_logits = tools['net'](encoded_seq, id_tuple, id_frags_list, seq_frag_tuple)
             m=torch.nn.Sigmoid()
             motif_logits = m(motif_logits)
+            classification_head = m(classification_head)
 
-            x = np.array(motif_logits.cpu())   #[batch, head, seq]
-
-            for i in range(len(id)):
-                id_protein=id[i].split('@')[0]
+            x_frag = np.array(motif_logits.cpu())   #[batch, head, seq]
+            x_pro = np.array(classification_head.cpu()) #[sample, n]
+            for i in range(len(id_frags_list)):
+                id_protein=id_frags_list[i].split('@')[0]
+                j= id_tuple.index(id_protein)
                 if id_protein in data_dict.keys():
-                    data_dict[id_protein]['id_frag'].append(id[i])
-                    data_dict[id_protein]['seq_frag'].append(seq_frag[i])
-                    data_dict[id_protein]['motif_logits'].append(x[i])    #[[head, seq], ...]
+                    data_dict[id_protein]['id_frag'].append(id_frags_list[i])
+                    data_dict[id_protein]['seq_frag'].append(seq_frag_tuple[i])
+                    data_dict[id_protein]['motif_logits'].append(x_frag[i])    #[[head, seq], ...]
                 else:
                     data_dict[id_protein]={}
-                    data_dict[id_protein]['id_frag']=[id[i]]
-                    data_dict[id_protein]['seq_frag']=[seq_frag[i]]
-                    data_dict[id_protein]['motif_logits']=[x[i]]
+                    data_dict[id_protein]['id_frag']=[id_frags_list[i]]
+                    data_dict[id_protein]['seq_frag']=[seq_frag_tuple[i]]
+                    data_dict[id_protein]['motif_logits']=[x_frag[i]]
+                    data_dict[id_protein]['type_pred']=x_pro[j]
+        print(2)
 
         data_dict = frag2protein_pred(data_dict, tools)
+        print(3)
 
         result_pro, motif_pred, result_id = get_prediction(n, data_dict)  # result_pro = [sample_size, class_num], sample order same as result_id  
                                                                                          # motif_pred = class_num dictionaries with protein id as keys
                                                                                          # result_id = [sample_size], protein ids
-        
-        present(tools, result_pro, motif_pred, result_id)
+        # present(tools, result_pro, motif_pred, result_id)
+        print(4)
+        present3(tools, result_pro, motif_pred, result_id, data_dict)
 
-        # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-        #      "SIGNAL", "chloroplast", "Thylakoid"]
-        # output_file = os.path.join(tools['result_path'],"prediction_results.txt")
-        # logfile=open(output_file, "w")
-        # result_bool= result_pro>0.5
-        # for i in range(len(result_id)):
-        #     id = result_id[i]
-        #     logfile.write(id+"\n")
-        #     pro_pred = result_bool[i]
-        #     pred = np.where(pro_pred==1)[0]
-        #     if pred.size == 0:
-        #         logfile.write("Other\n")
-        #     else:
-        #         for j in pred:
-        #             logfile.write(classname[j]+"\n")
-        #             logfile.write(str(motif_pred[j][id]>0.5)+"\n")
-        # logfile.close()
+
 
 
         
@@ -158,15 +298,21 @@ class LocalizationDataset_pred(Dataset):
     def __len__(self):
         return len(self.samples)
     def __getitem__(self, idx):
-        id, seq_frag = self.samples[idx]
-        return id, seq_frag
+        id, id_frag_list, seq_frag_list = self.samples[idx]
+        return id, id_frag_list, seq_frag_list
 
-def split_protein_sequence_pred(sequence, configs):
+def custom_collate_pred(batch):
+    id, id_frags, fragments = zip(*batch)
+    return id, id_frags, fragments
+
+def split_protein_sequence_pred(prot_id, sequence, configs):
     fragment_length = configs.encoder.max_len - 2
     overlap = configs.encoder.frag_overlap
     fragments = []
+    id_frags = []
     sequence_length = len(sequence)
     start = 0
+    ind=0
 
     while start < sequence_length:
         end = start + fragment_length
@@ -174,11 +320,13 @@ def split_protein_sequence_pred(sequence, configs):
             end = sequence_length
         fragment = sequence[start:end]
         fragments.append(fragment)
+        id_frags.append(prot_id+"@"+str(ind))
+        ind+=1
         if start + fragment_length > sequence_length:
             break
         start += fragment_length - overlap
 
-    return fragments
+    return id_frags, fragments
 
 def prepare_samples_pred(csv_file, configs):
     # label2idx = {"Nucleus":0, "ER":1, "Peroxisome":2, "Mitochondrion":3, "Nucleus_export":4,
@@ -193,10 +341,11 @@ def prepare_samples_pred(csv_file, configs):
         prot_id = df.loc[i,"Entry"]
         seq = df.loc[i,"Sequence"]
   
-        fragments = split_protein_sequence_pred(seq, configs)
-        for j in range(len(fragments)):
-            id=prot_id+"@"+str(j)
-            samples.append((id, fragments[j]))
+        id_frag_list, seq_frag_list = split_protein_sequence_pred(prot_id, seq, configs)
+        samples.append((prot_id, id_frag_list, seq_frag_list))
+        # for j in range(len(seq_frag_list )):
+        #     id=prot_id+"@"+str(j)
+        #     samples.append((id, fragments[j]))
         
     return samples
 
@@ -212,7 +361,7 @@ def prepare_dataloaders_pred(configs, input_file):
     # print(train_dataset)
     dataset = LocalizationDataset_pred(samples, configs=configs)
  
-    pred_dataloader = DataLoader(dataset, batch_size=configs.train_settings.batch_size, shuffle=False)
+    pred_dataloader = DataLoader(dataset, batch_size=configs.train_settings.batch_size, shuffle=False, collate_fn=custom_collate_pred)
 
     return pred_dataloader
 

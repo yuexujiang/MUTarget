@@ -39,7 +39,6 @@ def loss_fix(id_frag, motif_logits, target_frag, tools):
     return motif_logits, target_frag
 
 
-
 def make_buffer(id_frag_list_tuple, seq_frag_list_tuple, target_frag_nplist_tuple, type_protein_pt_tuple):
     id_frags_list = []
     seq_frag_list = []
@@ -411,9 +410,9 @@ def get_scores(tools, cutoff, n, data_dict):
     # Negtive_detect_num=0
     # Negtive_num=0
 
-    TP_pro=np.zeros(n)
-    FP_pro=np.zeros(n)
-    FN_pro=np.zeros(n)
+    TPR_pro=np.zeros(n)
+    FPR_pro=np.zeros(n)
+    FNR_pro=np.zeros(n)
     IoU_pro = np.zeros(n)
     # Negtive_detect_pro=0
     # Negtive_pro=0
@@ -431,9 +430,9 @@ def get_scores(tools, cutoff, n, data_dict):
                 y_frag = data_dict[id_protein]['motif_target_protein'][head]
                 # Negtive_pro += np.sum(np.max(y)==0)
                 # Negtive_detect_pro += np.sum((np.max(y)==0) * (np.max(x>=cutoff)==1))
-                TP_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==1))
-                FP_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==0))
-                FN_pro[head] += np.sum((x_frag<cutoff) * (y_frag==1))
+                TPR_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==1))/np.sum(y_frag==1)
+                FPR_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==0))/np.sum(y_frag==0)
+                FNR_pro[head] += np.sum((x_frag<cutoff) * (y_frag==1))/np.sum(y_frag==1)
                 # x_list.append(np.max(x))
                 # y_list.append(np.max(y))
     
@@ -452,7 +451,7 @@ def get_scores(tools, cutoff, n, data_dict):
     
     for head in range(n):
         # IoU[head] = TP_frag[head] / (TP_frag[head] + FP_frag[head] + FN_frag[head])
-        IoU_pro[head] = TP_pro[head] / (TP_pro[head] + FP_pro[head] + FN_pro[head])
+        IoU_pro[head] = TPR_pro[head] / (TPR_pro[head] + FPR_pro[head] + FNR_pro[head])
         cs_acc[head] = cs_correct[head] / cs_num[head]
     # FDR_frag = Negtive_detect_num / Negtive_num
     # FDR_pro = Negtive_detect_pro / Negtive_pro

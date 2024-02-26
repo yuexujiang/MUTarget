@@ -141,7 +141,6 @@ def present2(tools, result_pro, motif_pred, result_id):
                         if site+2<=seq_len-1:
                             sites = sites.extend([site+1, site+2])
                     result[id][name]=str(np.array(sites))
-    print(result)
     json_object = json.dumps(result, indent=2, cls=NpEncoder)
     output_file = os.path.join(tools['result_path'],"prediction_results.json")
     with open(output_file, "w") as outfile:
@@ -196,7 +195,7 @@ def present3(tools, result_pro, motif_pred, result_id, data_dict):
                         if site-2>=0:
                             sites = [site-2, site-1, site]
                         if site+2<=seq_len-1:
-                            sites = sites.extend([site+1, site+2])
+                            sites.extend([site+1, site+2])
                     motif_score[sites]=score
                     # result[id][name]=str(np.array(sites))
         id2AAscores[id]=motif_score

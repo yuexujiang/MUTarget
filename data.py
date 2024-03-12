@@ -1,4 +1,3 @@
-
 import torch
 torch.manual_seed(0)
 from torch.utils.data import Dataset
@@ -24,11 +23,16 @@ class LocalizationDataset(Dataset):
         print(self.count_samples_by_class(self.n, self.samples))
         self.class_weights = calculate_class_weights(self.count_samples_by_class(self.n, self.samples))
         print(self.class_weights)
+
+        self.apply_supcon = configs.supcon.apply
+        self.n_pos = configs.supcon.n_pos
+        self.n_neg = configs.supcon.n_neg
+        self.hard_neg = configs.supcon.hard_neg
     @staticmethod
     def count_samples_by_class(n, samples):
         """Count the number of samples for each class."""
         # class_counts = {}
-        class_counts = np.zeros(n) # one extra is for samples without motif
+        class_counts = np.zeros(n)  # one extra is for samples without motif
         # Iterate over the samples
         for id, id_frag_list, seq_frag_list, target_frag_list, type_protein in samples:
             class_counts += type_protein
@@ -37,9 +41,8 @@ class LocalizationDataset(Dataset):
         return len(self.samples)
     def __getitem__(self, idx):
         id, id_frag_list, seq_frag_list, target_frag_list, type_protein = self.samples[idx]
-
-        labels=np.where(type_protein==1)[0]
-        weights=[]
+        labels = np.where(type_protein == 1)[0]
+        weights = []
         for label in labels:
             weights.append(self.class_weights[label])
         sample_weight = max(weights)
@@ -49,16 +52,90 @@ class LocalizationDataset(Dataset):
         #     weights.append(self.class_weights[label])
         # if np.max(target_frags)==0:
         #     weights.append(self.class_weights[self.n])
-        
+
         # sample_weight = max(weights)
         # target_frags = torch.from_numpy(np.stack(target_frags, axis=0))
         type_protein = torch.from_numpy(type_protein)
-        return id, id_frag_list, seq_frag_list, target_frag_list, type_protein, sample_weight 
+        pos_neg = None
+        if self.apply_supcon:
+            # Even when not in warm starting, the following code is still executed, although its results are not used
+            pos_samples = self.get_pos_samples(idx)
+            neg_samples = self.get_neg_samples(idx)
+            pos_neg = [pos_samples, neg_samples]
+        return id, id_frag_list, seq_frag_list, target_frag_list, type_protein, sample_weight, pos_neg
         # return id, type_protein
-    
+
+    def get_pos_samples(self, anchor_idx):
+        filtered_samples = [sample for idx, sample in enumerate(self.samples) if idx != anchor_idx]
+        anchor_type_protein = self.samples[anchor_idx][4]
+        pos_samples = [sample for sample in filtered_samples if
+                       np.any(np.logical_and(anchor_type_protein == 1, sample[4] == 1))]
+        if len(pos_samples) < self.n_pos:
+            # raise ValueError(f"Not enough positive samples for {anchor_type_protein} found: {len(pos_samples)}. Required: {self.n_pos}.")
+            samples_to_add = self.n_pos - len(pos_samples)
+            for _ in range(samples_to_add):
+                pos_samples.append(random.choice(pos_samples))
+        if len(pos_samples) > self.n_pos:
+            pos_samples = random.sample(pos_samples, self.n_pos)
+        # print(len(pos_samples))
+        # print(self.n_pos)
+        return pos_samples
+
+    def get_neg_samples(self, anchor_idx):
+        filtered_samples = [sample for idx, sample in enumerate(self.samples) if idx != anchor_idx]
+        anchor_type_protein = self.samples[anchor_idx][4]
+        if self.hard_neg:
+            hneg = self.hard_mining(anchor_type_protein)
+            neg_samples = [sample for sample in filtered_samples if
+                           np.any(np.logical_and(hneg == 1, sample[4] == 1))]
+
+        else:
+            neg_samples = [sample for sample in filtered_samples if
+                           not np.any(np.logical_and(anchor_type_protein == 1, sample[4] == 1))]
+        if len(neg_samples) < self.n_neg:
+            # raise ValueError(f"Not enough negative samples ({hneg}) for {anchor_type_protein} found: {len(neg_samples)}. Required: {self.n_neg}.")
+            # print(f"Not enough negative samples ({hneg}) for {anchor_type_protein} found: {len(neg_samples)}. Required: {self.n_neg}.")
+            # print('The rest of negative samples are randomly selected.')
+            neg_samples_2 = [sample for sample in filtered_samples if
+                           not np.any(np.logical_and(anchor_type_protein == 1, sample[4] == 1))]
+            neg_samples_2 = random.sample(neg_samples_2, self.n_neg-len(neg_samples))
+            neg_samples.extend(neg_samples_2)
+        if len(neg_samples) > self.n_neg:
+            neg_samples = random.sample(neg_samples, self.n_neg)
+        return neg_samples
+
+    @staticmethod
+    def hard_mining(anchor_type_protein, file_path='distance_map.txt'):
+        with open(file_path, 'r') as source_file:
+            content = eval(source_file.read())
+
+        # print(content)
+        min_non_zero_keys = {}
+
+        for main_key, sub_dict in content.items():
+            # Filter out zero values and find the minimum
+            non_zero_values = {k: v for k, v in sub_dict.items() if v > 0}
+            min_key = min(non_zero_values, key=non_zero_values.get)
+            min_non_zero_keys[main_key] = min_key
+
+        label2idx = {"Nucleus": 0, "ER": 1, "Peroxisome": 2, "Mitochondrion": 3, "Nucleus_export": 4,
+                     "SIGNAL": 5, "chloroplast": 6, "Thylakoid": 7}
+        mapped_dict = {label2idx[key]: label2idx[value] for key, value in min_non_zero_keys.items()}
+
+        neg = [0, 0, 0, 0, 0, 0, 0, 0]
+        for i in range(len(anchor_type_protein)):
+            if anchor_type_protein[i] == 1:
+                neg[mapped_dict[i]] = 1
+        for i in range(len(anchor_type_protein)):
+            if anchor_type_protein[i] == 1:
+                neg[i] = 0
+        if all(v == 0 for v in neg):
+            neg = [1 if x == 0 else 0 for x in anchor_type_protein]
+        return np.array(neg)
+
 def custom_collate(batch):
-    id, id_frags, fragments, target_frags, type_protein, sample_weight = zip(*batch)
-    return id, id_frags, fragments, target_frags, type_protein, sample_weight
+    id, id_frags, fragments, target_frags, type_protein, sample_weight, pos_neg = zip(*batch)
+    return id, id_frags, fragments, target_frags, type_protein, sample_weight, pos_neg
 
 
 def prot_id_to_seq(seq_file):
@@ -100,31 +177,32 @@ def split_protein_sequence(prot_id, sequence, targets, configs):
     id_frags = []
     sequence_length = len(sequence)
     start = 0
-    ind=0
+    ind = 0
 
     while start < sequence_length:
         end = start + fragment_length
         if end > sequence_length:
             end = sequence_length
         fragment = sequence[start:end]
-        target_frag = targets[:,start:end]
-        if target_frag.shape[1]<fragment_length:
-            pad=np.zeros([targets.shape[0],fragment_length-target_frag.shape[1]])
-            target_frag =  np.concatenate((target_frag, pad),axis=1)
+        target_frag = targets[:, start:end]
+        if target_frag.shape[1] < fragment_length:
+            pad = np.zeros([targets.shape[0], fragment_length-target_frag.shape[1]])
+            target_frag = np.concatenate((target_frag, pad), axis=1)
         target_frags.append(target_frag)
         fragments.append(fragment)
         id_frags.append(prot_id+"@"+str(ind))
-        ind+=1
+        ind += 1
         if start + fragment_length > sequence_length:
             break
         start += fragment_length - overlap
 
     return id_frags, fragments, target_frags
 
+
 #["Nucleus","ER","Peroxisome","Mitochondrion","Nucleus_export","dual","SIGNAL","chloroplast","Thylakoid"]
 def fix_sample(motif_left, motif_right, label, label2idx, type_protein, targets):
-    if motif_left=="None":
-        motif_left=0
+    if motif_left == "None":
+        motif_left = 0
     else:
         motif_left = int(motif_left)-1
     motif_right = int(motif_right)
@@ -135,23 +213,23 @@ def fix_sample(motif_left, motif_right, label, label2idx, type_protein, targets)
     return motif_left, motif_right, type_protein, targets
 
 
-
 def prepare_samples(csv_file, configs):
     # label2idx = {"Nucleus":0, "ER":1, "Peroxisome":2, "Mitochondrion":3, "Nucleus_export":4,
     #              "dual":5, "SIGNAL":6, "chloroplast":7, "Thylakoid":8}
-    label2idx = {"Nucleus":0, "ER":1, "Peroxisome":2, "Mitochondrion":3, "Nucleus_export":4,
-                 "SIGNAL":5, "chloroplast":6, "Thylakoid":7}
+    label2idx = {"Nucleus": 0, "ER": 1, "Peroxisome": 2, "Mitochondrion": 3, "Nucleus_export": 4,
+                 "SIGNAL": 5, "chloroplast": 6, "Thylakoid": 7}
     samples = []
     n = configs.encoder.num_classes
     df = pd.read_csv(csv_file)
-    row,col=df.shape
+    row, col = df.shape
     for i in range(row):
-        prot_id = df.loc[i,"Entry"]
-        seq = df.loc[i,"Sequence"]
-        targets = np.zeros([n,len(seq)])
+        prot_id = df.loc[i, "Entry"]
+        seq = df.loc[i, "Sequence"]
+        targets = np.zeros([n, len(seq)])
         type_protein = np.zeros(n)
         # motifs = df.iloc[i,1:-2]
-        motifs = df.loc[i,"MOTIF"].split("|")
+        motifs = df.loc[i, "MOTIF"].split("|")
+        notdual_flag = True
         for motif in motifs:
             if not pd.isnull(motif):
                 # label = motif.split("|")[0].split(":")[1]
@@ -174,39 +252,44 @@ def prepare_samples(csv_file, configs):
                         targets[index_row, motif_left] = 1
                     elif label == "Nucleus" or label == "Nucleus_export":
                         targets[index_row, motif_left:motif_right] = 1
-        id_frag_list, seq_frag_list, target_frag_list = split_protein_sequence(prot_id, seq, targets, configs)
-        samples.append((prot_id, id_frag_list, seq_frag_list, target_frag_list, type_protein))
+                else:
+                    # print(label)
+                    # print('It is dual!')
+                    notdual_flag = False
+        if notdual_flag:
+            id_frag_list, seq_frag_list, target_frag_list = split_protein_sequence(prot_id, seq, targets, configs)
+            samples.append((prot_id, id_frag_list, seq_frag_list, target_frag_list, type_protein))
         # for j in range(len(fragments)):
         #     id=prot_id+"@"+str(j)
         #     samples.append((id, fragments[j], target_frags[j], type_protein))
-        
     return samples
 
 
 def prepare_dataloaders(configs, valid_batch_number, test_batch_number):
     # id_to_seq = prot_id_to_seq(seq_file)
     if configs.train_settings.dataset == 'v2':
-        samples = prepare_samples("./parsed_EC7_v2/PLANTS_uniprot.csv",configs)
+        samples = prepare_samples("./parsed_EC7_v2/PLANTS_uniprot.csv", configs)
         samples.extend(prepare_samples("./parsed_EC7_v2/ANIMALS_uniprot.csv", configs))
         samples.extend(prepare_samples("./parsed_EC7_v2/FUNGI_uniprot.csv", configs))
-        cv=pd.read_csv("./parsed_EC7_v2/split/type/partition.csv")
+        cv = pd.read_csv("./parsed_EC7_v2/split/type/partition.csv")
     elif configs.train_settings.dataset == 'v3':
-        samples = prepare_samples("./parsed_EC7_v3/PLANTS_uniprot.csv",configs)
+        samples = prepare_samples("./parsed_EC7_v3/PLANTS_uniprot.csv", configs)
         samples.extend(prepare_samples("./parsed_EC7_v3/ANIMALS_uniprot.csv", configs))
         samples.extend(prepare_samples("./parsed_EC7_v3/FUNGI_uniprot.csv", configs))
-        cv=pd.read_csv("./parsed_EC7_v3/split/type/partition.csv")
-    train_id=[]
-    val_id=[]
-    test_id=[]
-    id=cv.loc[:,'entry']
+        cv = pd.read_csv("./parsed_EC7_v3/split/type/partition.csv")
+
+    train_id = []
+    val_id = []
+    test_id = []
+    id = cv.loc[:, 'entry']
     # split=cv.loc[:,'split']
     # fold=cv.loc[:,'fold']
-    partition=cv.loc[:,'partition']
+    partition = cv.loc[:, 'partition']
     for i in range(len(id)):
         # f=fold[i]
         # s=split[i]
-        p=partition[i]
-        d=id[i]
+        p = partition[i]
+        d = id[i]
         if p == valid_batch_number:
             val_id.append(d)
         elif p == test_batch_number:
@@ -217,14 +300,14 @@ def prepare_dataloaders(configs, valid_batch_number, test_batch_number):
 
     # print(train_id)
 
-    
-    train_sample=[]
-    valid_sample=[]
-    test_sample=[]
+
+    train_sample = []
+    valid_sample = []
+    test_sample = []
 
     for i in samples:
         # id=i[0].split("@")[0]
-        id=i[0]
+        id = i[0]
         # print(id)
         if id in train_id:
             train_sample.append(i)
@@ -256,7 +339,7 @@ def prepare_dataloaders(configs, valid_batch_number, test_batch_number):
     train_dataloader = DataLoader(train_dataset, batch_size=configs.train_settings.batch_size, shuffle=True, collate_fn=custom_collate)
     valid_dataloader = DataLoader(valid_dataset, batch_size=configs.valid_settings.batch_size, shuffle=True, collate_fn=custom_collate)
     test_dataloader = DataLoader(test_dataset, batch_size=configs.valid_settings.batch_size, shuffle=True, collate_fn=custom_collate)
-    return {'train': train_dataloader, 'test': test_dataloader , 'valid': valid_dataloader}
+    return {'train': train_dataloader, 'test': test_dataloader, 'valid': valid_dataloader}
 
 if __name__ == '__main__':
     config_path = './config.yaml'
@@ -268,9 +351,9 @@ if __name__ == '__main__':
     dataloaders_dict = prepare_dataloaders(configs_file, 0, 1)
 
     for batch in dataloaders_dict['train']:
-        # id_batch, fragments_batch, target_frags_batch, weights_batch = batch 
-        (prot_id, id_frag_list, seq_frag_list, target_frag_nplist, type_protein_pt, sample_weight) = batch 
-        # id, type_protein = batch 
+        # id_batch, fragments_batch, target_frags_batch, weights_batch = batch
+        (prot_id, id_frag_list, seq_frag_list, target_frag_nplist, type_protein_pt, sample_weight) = batch
+        # id, type_protein = batch
         # print(len(id_batch))
         # print(len(fragments_batch))
         # print(np.array(target_frags_batch).shape)

@@ -13,8 +13,10 @@ from utils import *
 from sklearn.metrics import roc_auc_score,average_precision_score,matthews_corrcoef,recall_score,precision_score,f1_score
 import pandas as pd
 import sys
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
+#pd.set_option('display.max_rows', None)
+#pd.set_option('display.max_columns', None)
+pd.set_option('display.expand_frame_repr', False)
+from scipy.ndimage import gaussian_filter
 
 
 def loss_fix(id_frag, motif_logits, target_frag, tools):
@@ -276,11 +278,13 @@ def frag2protein(data_dict, tools):
                 motif_logits_protein = np.concatenate((motif_logits_protein[:,:-overlap], x_overlap, motif_logits_frag[:,overlap:l]),axis=1)
                 motif_target_protein = np.concatenate((motif_target_protein, target_frag[:,overlap:l]), axis=1)
         data_dict[id_protein]['seq_protein']=seq_protein
+        motif_logits_protein[0] = gaussian_filter(motif_logits_protein[0], sigma=2, truncate=1,mode="nearest") # nucleus
+        motif_logits_protein[4] = gaussian_filter(motif_logits_protein[4], sigma=2, truncate=1,mode="nearest") # nucleus_export
         data_dict[id_protein]['motif_logits_protein']=motif_logits_protein
         data_dict[id_protein]['motif_target_protein']=motif_target_protein
     return data_dict
-
-def evaluate_protein(dataloader, tools):
+    
+def get_data_dict(dataloader, tools):
     # Set the model to evaluation mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
     # model.eval().cuda()
@@ -330,74 +334,143 @@ def evaluate_protein(dataloader, tools):
                     data_dict[id_protein]['type_target']=y_pro[j]
 
         data_dict = frag2protein(data_dict, tools)
+    return data_dict
 
-        # IoU_difcut=np.zeros([n, 9])
-        # FDR_frag_difcut=np.zeros([1,9])
-        IoU_pro_difcut=np.zeros([n, 9])  #just for nuc and nuc_export
-        # FDR_pro_difcut=np.zeros([1,9])
-        result_pro_difcut=np.zeros([n,6,9])
-        cs_acc_difcut=np.zeros([n, 9]) 
-        classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-             "SIGNAL", "chloroplast", "Thylakoid"]
-        criteria=["roc_auc_score", "average_precision_score", "matthews_corrcoef",
-              "recall_score", "precision_score", "f1_score"]
-
-        cutoffs=[x / 10 for x in range(1, 10)]
-        cut_dim=0
-        for cutoff in cutoffs:
-            scores=get_scores(tools, cutoff, n, data_dict)
+def evaluate_protein(data_dict, tools, constrain):
+    n=tools['num_classes']
+    # IoU_difcut=np.zeros([n, 9])
+    # FDR_frag_difcut=np.zeros([1,9])
+    IoU_pro_difcut=np.zeros([n, 9, 9])  #just for nuc and nuc_export
+    # FDR_pro_difcut=np.zeros([1,9])
+    result_pro_difcut=np.zeros([n,6,9])
+    cs_acc_difcut=np.zeros([n, 9]) 
+    classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
+         "SIGNAL", "chloroplast", "Thylakoid"]
+    criteria=["roc_auc_score", "average_precision_score", "matthews_corrcoef",
+          "recall_score", "precision_score", "f1_score"]
+    cutoffs=[x / 10 for x in range(1, 10)]
+    cutoff_dim_pro = 0
+    for cutoff_pro in cutoffs:
+        cutoff_dim_aa = 0
+        for cutoff_aa in cutoffs:
+            cutoff_pro_list = [cutoff_pro] * n
+            cutoff_aa_list = [cutoff_aa] * n
+            scores=get_scores(tools, cutoff_pro_list, cutoff_aa_list, n, data_dict, constrain)
             # IoU_difcut[:,cut_dim]=scores['IoU']
             # IoU_difcut[:,cut_dim]=np.array([float("{:.3f}".format(i)) for i in scores['IoU']])
             # FDR_frag_difcut[:,cut_dim]=scores['FDR_frag']
             # FDR_frag_difcut[:,cut_dim]=float("{:.3f}".format(scores['FDR_frag']))
-            IoU_pro_difcut[:,cut_dim]=scores['IoU_pro']
+            IoU_pro_difcut[:, cutoff_dim_pro, cutoff_dim_aa]=scores['IoU_pro']
             # IoU_pro_difcut[:,cut_dim]=np.array([float("{:.3f}".format(i)) for i in scores['IoU_pro']])
             # FDR_pro_difcut[:,cut_dim]=scores['FDR_pro']
             # FDR_pro_difcut[:,cut_dim]=float("{:.3f}".format(scores['FDR_pro']))
-            result_pro_difcut[:,:,cut_dim]=scores['result_pro']
             # result_pro_difcut[:,:,cut_dim]=np.array([float("{:.3f}".format(i)) for i in scores['result_pro'].reshape(-1)]).reshape(scores['result_pro'].shape)
-            cs_acc_difcut[:,cut_dim]=scores['cs_acc'] 
-            cut_dim+=1
+            cs_acc_difcut[:, cutoff_dim_pro]=scores['cs_acc'] 
+            cutoff_dim_aa += 1
+        result_pro_difcut[:,:,cutoff_dim_pro]=scores['result_pro']
+        cutoff_dim_pro += 1
+    
+    print(cutoffs)
+    opti_cutoffs_pro = [0] * n
+    opti_cutoffs_aa = [0] * n
+    for head in range(n):
+        best_f1 = -np.inf
+        best_IoU = -np.inf
+        best_cs = -np.inf
+        for index in range(len(cutoffs)):
+            f1 = result_pro_difcut[head, -1, index] # -1 is f1 score
+            if f1 > best_f1:
+                best_f1 = f1
+                opti_cutoffs_pro[head] = cutoffs[index]
+            if head == 0 or head == 4:
+                if constrain:
+                    index_pro = cutoffs.index(opti_cutoffs_pro[head])
+                    IoU = IoU_pro_difcut[head, index_pro, index] # dim 2 could be any when constrain is false, lv1 and lv2 are independent
+                else:
+                    IoU = IoU_pro_difcut[head, 0, index] # dim 2 could be any when constrain is false, lv1 and lv2 are independent
+                if IoU > best_IoU:
+                    best_IoU = IoU
+                    opti_cutoffs_aa[head] = cutoffs[index]
+            else:
+                cs = cs_acc_difcut[head, index]
+                if cs > best_cs:
+                    best_cs = cs
+                    opti_cutoffs_aa[head] = cutoffs[index]
+    
+    IoU_pro_difcut=np.zeros([n])  #just for nuc and nuc_export
+    # result_pro_difcut=np.zeros([n,6,9])
+    result_pro_difcut=np.zeros([n,6])
+    # cs_acc_difcut=np.zeros([n, 9]) 
+    cs_acc_difcut=np.zeros([n]) 
+    scores=get_scores(tools, opti_cutoffs_pro, opti_cutoffs_aa, n, data_dict, constrain)
+    IoU_pro_difcut=scores['IoU_pro']
+    cs_acc_difcut=scores['cs_acc'] 
+    result_pro_difcut=scores['result_pro']
+    
 
-        customlog(tools["logfilepath"], f"===========================================\n")
-        # classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
-        #          "dual", "SIGNAL", "chloroplast", "Thylakoid"]
-        
-        # customlog(tools["logfilepath"], f" Jaccard Index (fragment): \n")
-        # IoU_difcut=pd.DataFrame(IoU_difcut,columns=cutoffs,index=classname)
-        # customlog(tools["logfilepath"], IoU_difcut.__repr__())
-        # # IoU_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t") 
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        # customlog(tools["logfilepath"], f" FDR (fragment): \n")
-        # FDR_frag_difcut=pd.DataFrame(FDR_frag_difcut,columns=cutoffs)
-        # customlog(tools["logfilepath"], FDR_frag_difcut.__repr__())
-        # # FDR_frag_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t")
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        customlog(tools["logfilepath"], f" Jaccard Index (protein): \n")
-        IoU_pro_difcut=pd.DataFrame(IoU_pro_difcut,columns=cutoffs,index=classname)
-        customlog(tools["logfilepath"], IoU_pro_difcut.__repr__())
-        # IoU_pro_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t")
-        customlog(tools["logfilepath"], f"===========================================\n")
-        # customlog(tools["logfilepath"], f" FDR (protein): \n")
-        # FDR_pro_difcut=pd.DataFrame(FDR_pro_difcut,columns=cutoffs)
-        # customlog(tools["logfilepath"], FDR_pro_difcut.__repr__())
+    customlog(tools["logfilepath"], f"===================Evaluate protein results========================\n")
+    customlog(tools["logfilepath"], f" optimized cutoffs: \n")
+    cutoffs =  np.array([opti_cutoffs_pro, opti_cutoffs_aa])
+    cutoffs = pd.DataFrame(cutoffs,columns=classname,index=["cutoffs_pro","cutoffs_aa"])
+    customlog(tools["logfilepath"], cutoffs.__repr__())
 
-        # customlog(tools["logfilepath"], f"===========================================\n")
-        customlog(tools["logfilepath"], f" cs acc: \n")
-        cs_acc_difcut=pd.DataFrame(cs_acc_difcut,columns=cutoffs,index=classname)
-        customlog(tools["logfilepath"], cs_acc_difcut.__repr__())
+    customlog(tools["logfilepath"], f"===========================================\n")
+    customlog(tools["logfilepath"], f" Jaccard Index (protein): \n")
+    IoU_pro_difcut=pd.DataFrame(IoU_pro_difcut,index=classname)
+    customlog(tools["logfilepath"], IoU_pro_difcut.__repr__())
 
-        # FDR_pro_difcut.to_csv(tools["logfilepath"],mode='a',sep="\t")
-        customlog(tools["logfilepath"], f"===========================================\n")
-        for i in range(len(classname)):
-            customlog(tools["logfilepath"], f" Class prediction performance ({classname[i]}): \n")
-            tem = pd.DataFrame(result_pro_difcut[i],columns=cutoffs,index=criteria)
-            customlog(tools["logfilepath"], tem.__repr__())
-            # tem.to_csv(tools["logfilepath"],mode='a',sep="\t")
+    customlog(tools["logfilepath"], f"===========================================\n")
+    customlog(tools["logfilepath"], f" cs acc: \n")
+    cs_acc_difcut=pd.DataFrame(cs_acc_difcut,index=classname)
+    customlog(tools["logfilepath"], cs_acc_difcut.__repr__())
+    
+    customlog(tools["logfilepath"], f"===========================================\n")
+    customlog(tools["logfilepath"], f" Class prediction performance: \n")
+    tem = pd.DataFrame(result_pro_difcut,columns=criteria,index=classname)
+    customlog(tools["logfilepath"], tem.__repr__())
 
+    return opti_cutoffs_pro, opti_cutoffs_aa
 
+def test_protein(data_dict, tools, opti_cutoffs_pro, opti_cutoffs_aa, constrain):
+    n=tools['num_classes']
+   
+    classname=["Nucleus", "ER", "Peroxisome", "Mitochondrion", "Nucleus_export",
+         "SIGNAL", "chloroplast", "Thylakoid"]
+    criteria=["roc_auc_score", "average_precision_score", "matthews_corrcoef",
+          "recall_score", "precision_score", "f1_score"]
+    
+    IoU_pro_difcut=np.zeros([n])  #just for nuc and nuc_export
+    # result_pro_difcut=np.zeros([n,6,9])
+    result_pro_difcut=np.zeros([n,6])
+    # cs_acc_difcut=np.zeros([n, 9]) 
+    cs_acc_difcut=np.zeros([n]) 
+    scores=get_scores(tools, opti_cutoffs_pro, opti_cutoffs_aa, n, data_dict, constrain)
+    IoU_pro_difcut=scores['IoU_pro']
+    cs_acc_difcut=scores['cs_acc'] 
+    result_pro_difcut=scores['result_pro']
+    
+    customlog(tools["logfilepath"], f"===================Test protein results constrain: {constrain}========================\n")
+    customlog(tools["logfilepath"], f" optimized cutoffs: \n")
+    cutoffs =  np.array([opti_cutoffs_pro, opti_cutoffs_aa])
+    cutoffs = pd.DataFrame(cutoffs,columns=classname,index=["cutoffs_pro","cutoffs_aa"])
+    customlog(tools["logfilepath"], cutoffs.__repr__())
 
-def get_scores(tools, cutoff, n, data_dict):
+    customlog(tools["logfilepath"], f"===========================================\n")
+    customlog(tools["logfilepath"], f" Jaccard Index (protein): \n")
+    IoU_pro_difcut=pd.DataFrame(IoU_pro_difcut,index=classname)
+    customlog(tools["logfilepath"], IoU_pro_difcut.__repr__())
+
+    customlog(tools["logfilepath"], f"===========================================\n")
+    customlog(tools["logfilepath"], f" cs acc: \n")
+    cs_acc_difcut=pd.DataFrame(cs_acc_difcut,index=classname)
+    customlog(tools["logfilepath"], cs_acc_difcut.__repr__())
+    
+    customlog(tools["logfilepath"], f"===========================================\n")
+    customlog(tools["logfilepath"], f" Class prediction performance: \n")
+    tem = pd.DataFrame(result_pro_difcut,columns=criteria,index=classname)
+    customlog(tools["logfilepath"], tem.__repr__())
+
+def get_scores(tools, cutoff_pro, cutoff_aa, n, data_dict, constrain):
     cs_num = np.zeros(n)
     cs_correct = np.zeros(n)
     cs_acc = np.zeros(n)
@@ -425,42 +498,47 @@ def get_scores(tools, cutoff, n, data_dict):
             y_pro = data_dict[id_protein]['type_target'][head]  #[1]   
             x_list.append(x_pro)  
             y_list.append(y_pro)
-            if y_pro==1:
+            if constrain:
+                condition = x_pro>=cutoff_pro[head]
+            else:
+                condition = True
+            if y_pro==1 and condition:
                 x_frag = data_dict[id_protein]['motif_logits_protein'][head]  #[seq]
                 y_frag = data_dict[id_protein]['motif_target_protein'][head]
                 # Negtive_pro += np.sum(np.max(y)==0)
                 # Negtive_detect_pro += np.sum((np.max(y)==0) * (np.max(x>=cutoff)==1))
-                TPR_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==1))/np.sum(y_frag==1)
-                FPR_pro[head] += np.sum((x_frag>=cutoff) * (y_frag==0))/np.sum(y_frag==0)
-                FNR_pro[head] += np.sum((x_frag<cutoff) * (y_frag==1))/np.sum(y_frag==1)
+                TPR_pro = np.sum((x_frag>=cutoff_aa[head]) * (y_frag==1))/np.sum(y_frag==1)
+                FPR_pro = np.sum((x_frag>=cutoff_aa[head]) * (y_frag==0))/np.sum(y_frag==0)
+                FNR_pro = np.sum((x_frag<cutoff_aa[head]) * (y_frag==1))/np.sum(y_frag==1)
                 # x_list.append(np.max(x))
                 # y_list.append(np.max(y))
+                IoU_pro[head] += TPR_pro / (TPR_pro + FPR_pro + FNR_pro)
     
                 cs_num[head] += np.sum(y_frag==1)>0
                 if np.sum(y_frag==1)>0:
                     cs_correct[head] += (np.argmax(x_frag) == np.argmax(y_frag))
-              
+
+        # IoU_pro[head] = TPR_pro[head] / (TPR_pro[head] + FPR_pro[head] + FNR_pro[head])
+        IoU_pro[head] = IoU_pro[head] / sum(y_list)
+        cs_acc[head] = cs_correct[head] / cs_num[head]   
+
         pred=np.array(x_list)
         target=np.array(y_list)
+        # print(target)
+        # print(pred)
+        # print(cutoff_pro[head])
         result_pro[head,0] = roc_auc_score(target, pred)
         result_pro[head,1] = average_precision_score(target, pred)
-        result_pro[head,2] = matthews_corrcoef(target, pred>=cutoff)
-        result_pro[head,3] = recall_score(target, pred>=cutoff)
-        result_pro[head,4] = precision_score(target, pred>=cutoff)
-        result_pro[head,5] = f1_score(target, pred>=cutoff)
+        result_pro[head,2] = matthews_corrcoef(target, pred>=cutoff_pro[head])
+        result_pro[head,3] = recall_score(target, pred>=cutoff_pro[head])
+        result_pro[head,4] = precision_score(target, pred>=cutoff_pro[head])
+        result_pro[head,5] = f1_score(target, pred>=cutoff_pro[head])
     
-    for head in range(n):
-        # IoU[head] = TP_frag[head] / (TP_frag[head] + FP_frag[head] + FN_frag[head])
-        IoU_pro[head] = TPR_pro[head] / (TPR_pro[head] + FPR_pro[head] + FNR_pro[head])
-        cs_acc[head] = cs_correct[head] / cs_num[head]
-    # FDR_frag = Negtive_detect_num / Negtive_num
-    # FDR_pro = Negtive_detect_pro / Negtive_pro
     
     scores={"IoU_pro":IoU_pro, #[n]
             "result_pro":result_pro, #[n, 6]
             "cs_acc": cs_acc} #[n]
     return scores
-
 
 def main(config_dict, valid_batch_number, test_batch_number):
     configs = load_configs(config_dict)
@@ -554,9 +632,17 @@ def main(config_dict, valid_batch_number, test_batch_number):
 
     customlog(logfilepath, f"Fold {valid_batch_number} test\n-------------------------------\n")
     start_time = time()
+    dataloader=tools["valid_loader"]
+    data_dict = get_data_dict(dataloader, tools)
+    opti_cutoffs_pro, opti_cutoffs_aa = evaluate_protein(data_dict, tools, False)
+    
     dataloader=tools["test_loader"]
-    # evaluate(tools, dataloader)
-    evaluate_protein(dataloader, tools)
+    data_dict = get_data_dict(dataloader, tools)
+    test_protein(data_dict, tools, opti_cutoffs_pro, opti_cutoffs_aa, False)
+    
+    dataloader=tools["test_loader"]
+    data_dict = get_data_dict(dataloader, tools)
+    test_protein(data_dict, tools, opti_cutoffs_pro, opti_cutoffs_aa, True)
     end_time = time()
 
     del tools, encoder, dataloaders_dict, optimizer, scheduler

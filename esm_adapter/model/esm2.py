@@ -21,6 +21,7 @@ class ESM2(nn.Module):
         alphabet: Union[esm_adapter.data.Alphabet, str] = "ESM-1b",
         token_dropout: bool = True,
         num_end_adapter_layers: int=None,
+        prefix_module: nn.Module = None,
     ):
         super().__init__()
         self.num_layers = num_layers
@@ -38,6 +39,8 @@ class ESM2(nn.Module):
         self.append_eos = alphabet.append_eos
         self.token_dropout = token_dropout
         self.num_end_adapter_layers = num_end_adapter_layers
+        self.prefix_module = prefix_module
+
 
         if num_end_adapter_layers is None or num_end_adapter_layers == 0:
           self._init_submodules()
@@ -150,6 +153,8 @@ class ESM2(nn.Module):
             need_head_weights = True
 
         assert tokens.ndim == 2
+        is_previoues_prompted = False
+        
         padding_mask = tokens.eq(self.padding_idx)  # B, T
 
         x = self.embed_scale * self.embed_tokens(tokens)
@@ -181,7 +186,33 @@ class ESM2(nn.Module):
         if not padding_mask.any():
             padding_mask = None
 
+        if padding_mask is not None and self.prefix_module is not None:
+            prefix_padding_mask = torch.zeros(padding_mask.shape[0], 
+                                              self.prefix_module.prompt_len, 
+                                              dtype=torch.bool, 
+                                              device=padding_mask.device)
+            padding_mask = torch.cat((prefix_padding_mask, padding_mask), dim=1)
+
+
         for layer_idx, layer in enumerate(self.layers):
+            
+            if (self.prefix_module is not None and 
+                layer_idx in self.prefix_module.prompt_layer_indices):
+                # (prompt_len+T, B, E) => (B, prompt_len+T, E)
+                x = x.transpose(0, 1)
+                
+                if is_previoues_prompted:
+                  # remove the prompt_tokens
+                  # (B, prompt_len+T, E) => (B, T, E)
+                  x = x[:, self.prefix_module.prompt_len:, :]
+                
+                x = self.prefix_module(x, layer_idx)
+                
+                # (B, prompt_len+T, E) => (prompt_len+T, B, E)
+                x = x.transpose(0, 1)
+                
+                is_previoues_prompted = True
+            
             x, attn = layer(
                 x,
                 self_attn_padding_mask=padding_mask,
@@ -195,6 +226,10 @@ class ESM2(nn.Module):
 
         x = self.emb_layer_norm_after(x)
         x = x.transpose(0, 1)  # (T, B, E) => (B, T, E)
+
+        if self.prefix_module is not None:
+            # remove the prompt_tokens
+            x = x[:, self.prefix_module.prompt_len:, :]  # => [B,T,E]
 
         # last hidden representation should have layer norm applied
         if (layer_idx + 1) in repr_layers:

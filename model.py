@@ -12,7 +12,7 @@ from transformers import EsmModel
 from utils import customlog
 
 import esm_utilities
-
+from prompt_tunning import PrefixTuning
 
 
 
@@ -238,6 +238,14 @@ class OfficialEsmEncoder(nn.Module):
             self.model = esm_utilities.load_model(
                 model_architecture=configs.encoder.model_name,
                 num_end_adapter_layers=2)
+            
+            if configs.PEFT == "PrefixPrompt":
+                # TODO(Yuexu): change the hyperparameter 
+                # (prompt_len and prompt_layer_indices) for your case.
+                prompt_model = PrefixTuning(self.model, 
+                                            prompt_len=10, 
+                                            prompt_layer_indices=[0]) 
+                self.model.prefix_module = prompt_model
 
             for param in self.model.parameters():
                 param.requires_grad = False
@@ -245,6 +253,11 @@ class OfficialEsmEncoder(nn.Module):
             if configs.PEFT == "Adapter":
                 for name, param in self.model.named_parameters():
                     if "adapter_layer" in name:
+                        param.requires_grad = True
+                        
+            elif configs.PEFT == "PrefixPrompt":
+                for name, param in self.model.named_parameters():
+                    if "prefix_module" in name:
                         param.requires_grad = True
             
             print("**********************************")

@@ -1,4 +1,4 @@
-/results/models/*
+/results/models/*/
 /outputs/
 analysis.py
 eval_binding_protein.py

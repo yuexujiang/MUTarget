@@ -35,7 +35,11 @@ sh install.sh
 
 ## Prediction
 
+<<<<<<< HEAD
 To run the inference code for a pre-trained model on a set of sequences, first you have to have download the pre-trained models and put them under the `result/models` directory (refer to pre-trained models section). Then, run the following command:
+=======
+To run the inference code for a pre-trained model on a set of sequences, first you have to have download the pre-trained models and put them under the 'result' directory (refer to pre-trained models section). Then, run the following command:
+>>>>>>> 9c8048c4bed7bc0070363142cba7b52052f5fe30
 
 ```commandline
 python predict.py --input_file <your_protein_seq.fa> --output_dir <specify_folder>
@@ -50,7 +54,11 @@ the following links and put them under the `results/models` directory
 
 | Model Name | Description                 | Download Link                                                                                                                                            |
 |------------|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+<<<<<<< HEAD
 | MuTarget   | [ensemble of 5 submodels] | [https://mailmissouri-my.sharepoint.com/:f:/g/personal/yjm85_umsystem_edu/EtxcOvEV07JFrTSA14AWf8oB3TTxNLRsa5-t18iyggIOaw?e=mv5r7t]|
+=======
+| MuTarget   | [ensemble of 5 submodels] | [Download]([this part will be updated]) |
+>>>>>>> 9c8048c4bed7bc0070363142cba7b52052f5fe30
 
 
 ## 📜 Citation
@@ -60,7 +68,11 @@ If you use this code or the pretrained models, please cite the following paper:
 [this part will be updated]
 
 ```bibtex
+<<<<<<< HEAD
 @article {,
+=======
+@article {Pourmirzaei2024.05.31.596915,
+>>>>>>> 9c8048c4bed7bc0070363142cba7b52052f5fe30
 	author = {},
 	title = {},
 	year = {},

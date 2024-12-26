@@ -1,0 +1,118 @@
+fix_seed: 0
+checkpoints_every: 16
+result_path: ./results_supcon
+config_path: ./config.yaml
+
+resume:
+  resume: False
+  resume_path: path/to/checkpoints.pth
+  restart_optimizer: True
+  frozen_esm: False
+
+encoder:
+  composition: esm_v2 # esm_v2, promprot, both
+  model_type: esm_v2 # esm_v2, t5
+  model_name:  facebook/esm2_t33_650M_UR50D # facebook/esm2_t33_650M_UR50D, facebook/esm2_t30_150M_UR50D, facebook/esm2_t12_35M_UR50D, facebook/esm2_t6_8M_UR50D, Rostlab/prot_t5_base_mt_uniref50
+  #  model_name:  facebook/esm2_t33_650M_UR50D # facebook/esm2_t33_650M_UR50D, facebook/esm2_t30_150M_UR50D, facebook/esm2_t12_35M_UR50D, facebook/esm2_t6_8M_UR50D, Rostlab/prot_t5_base_mt_uniref50
+  max_len: 1024
+  num_classes: 9 #8+1
+  prm4prmpro: ppi
+  frag_overlap: 200
+
+  cnn_filter_num: 10
+  cnn_filter_size: 5
+  adapter_lr_num: 5
+
+PEFT: PFT #PFT #lora # FT, PFT, frozen, lora, PromT
+
+decoder:
+  combine: True #combine classification and motif?
+  apply_DNN: False
+  type: "multiscalecnn-linear" #"multiscalecnn-linear" #"shared_multiscalecnn" #"cnn-linear" #"cnn" "linear" "cnn-linear"
+  cnn_channel: 32
+  cnn_kernel: [7] #[1,5,7]
+  droprate: 0.15
+  inner_linear_dim: 128
+  linear_num_layers: 2
+  output_act: tanh #tanh #sigmoid
+
+train_settings:
+  patience: 30
+  other_weight: 0.001 #0.0005
+  dataloader: "batchsample" #"batchsample","clean"
+  num_epochs: 200 #15
+  shuffle: True
+  device: cuda:0
+  batch_size: 16 #16
+  grad_accumulation: 1
+  #loss_pos_weight: 35 #35 no need!
+  additional_pos_weights: False
+  loss_pos_weight_nucleus: 35
+  loss_pos_weight_nucleus_export: 35
+  dataset: v2 # v2, v3
+  fine_tune_lr: -2 # -1, -2, -3
+  log_every: 30
+  clip_grad_norm: 1
+  data_aug:
+    enable: True
+    binomial: True
+    per_times: 5
+    add_original: False
+    add_original_but_not_export: False  # False: old add_original
+    neg_mutation_rate: 0.3
+    pos_mutation_rate: 0.1
+    warmup: 0
+    cooldown: 0
+  
+  train_9_classes:
+       enable: True
+  
+  weighted_loss_sum_start_epoch: 10000
+  loss_sum_weights: [1, 1]
+  predict_max: True  # False -> mean
+  add_sample_weight_to_position_loss: True
+  add_sample_weight_to_class_loss_when_data_aug: True
+  only_use_position_loss: False  # check apply_DNN
+  position_loss_T: 0.01 #0.0005 #0.01 #0.02 #0.2
+  class_loss_T: 5
+  ignore_ori: False
+
+valid_settings:
+  do_every: 1
+  batch_size: 16
+  device: cuda:0
+
+
+predict_settings:
+  batch_size: 16
+  device: cuda:0
+  cutoffs: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+optimizer:
+  name: adam
+  lr: 1e-5 #1e-2
+  weight_decouple: True
+  weight_decay: 1e-3 #0.0005
+  eps: 1e-16
+  beta_1: 0.9
+  beta_2: 0.999
+  use_8bit_adam: False
+  grad_clip_norm: 1
+  decay:
+    warmup: 1024
+    min_lr: 1e-6
+    gamma: 0.2
+    num_restarts: 1
+    first_cycle_steps: 40500  #null before
+  mode: cosine #skip, cosine
+
+supcon:
+  apply: False
+  drop_out: 0.1
+  n_pos: 2 #9
+  n_neg: 2 #30
+  temperature: 0.1
+  hard_neg: False
+  weight: 1
+  warm_start: 0
+  apply_supcon_loss: False #if False can still apply supcon sampling method, but no supcon loss!

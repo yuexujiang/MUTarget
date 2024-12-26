@@ -1,0 +1,10 @@
+pandas
+pyyaml
+python-box[all]~=7.0
+pytest-shutil
+peft==0.11.0
+transformers==4.38.2
+scikit-learn
+biopython==1.79
+tensorboard==2.15.0
+numpy==1.26.0

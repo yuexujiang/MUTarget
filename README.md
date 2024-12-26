@@ -23,63 +23,35 @@ cd [...]
 
 To use this project, do as the following to install the dependencies.
 
-1. Create a new environment using: `conda create --name myenv python=3.9`.
+1. Create a new environment using: `conda create --name myenv python=3.10`.
 2. Activate the environment you have just created: `conda activate myenv`.
 3. Make the install.sh file executable by running the following command `chmod +x install.sh`.
 4. Finally, run the following command to install the required packages inside the conda environment:
 
 ```commandline
-bash install_conda.sh
+sh install.sh
 ```
 
-Or you can create a python environment and install the required packages using `install_pip.sh` file:
-1. Create a new environment using: `python -m venv myenv`.
-2. Activate the environment you have just created: `source my env/bin/activate`.
-3. Make the install.sh file executable by running the following command `chmod +x install.sh`.
-4. Finally, run the following command to install the required packages inside the conda environment: 
-
-```commandline
-bash install_pip.sh
-```
 
 ## Prediction
 
-To run the inference code for a pre-trained model on a set of sequences, first you have to set the
-`inference_config.yaml` file. You need to have access to the result directory of the pre-trained model
-including best checkpoint and config file to be able to run the inference code (refer to pre-trained models section)
-The `inference_config.yaml` file is set as the following:
-
-```yaml
-pretrained_config_path: /path/to/config.yaml
-input_file: /path/to/fasta_file.fasta
-output_dir: /path/to/inference/results/
-model_dir: /path/to/model/
-constrain: True
-ensemble: True
-with_label: False
-```
-
-For data_path, you need to set a fasta file containing the sequences you want to predict on.
-Then, run the following command:
+To run the inference code for a pre-trained model on a set of sequences, first you have to have download the pre-trained models and put them under the `result/models` directory (refer to pre-trained models section). Then, run the following command:
 
 ```commandline
-python predict.py --inference_config_path inference_config.yaml
+python predict.py --input_file <your_protein_seq.fa> --output_dir <specify_folder>
 ```
 
-After running the inference code, you can find the results as a json file in the `output_dir` directory specified 
-in the `inference_config.yaml` file.
+After running the inference code, you can find the results as a json file in the `output_dir` directory 
 
 ## Pretrained Models
 
 In the following table, you can find the pre-trained models that we have used in the paper. You can download them from
-the following links:
+the following links and put them under the `results/models` directory
 
 | Model Name | Description                 | Download Link                                                                                                                                            |
 |------------|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
-| MuTarget   | [this part will be updated] | [Download]([this part will be updated]) |
-| MuTarget   | [this part will be updated] | [Download]([this part will be updated]) |
+| MuTarget   | [ensemble of 5 submodels] | [https://mailmissouri-my.sharepoint.com/:f:/g/personal/yjm85_umsystem_edu/EtxcOvEV07JFrTSA14AWf8oB3TTxNLRsa5-t18iyggIOaw?e=mv5r7t]|
 
-We will add more pre-trained models in the future.
 
 ## 📜 Citation
 
@@ -88,11 +60,11 @@ If you use this code or the pretrained models, please cite the following paper:
 [this part will be updated]
 
 ```bibtex
-@article {Pourmirzaei2024.05.31.596915,
-	author = {Pourmirzaei, Mahdi and Esmaili, Farzaneh and Pourmirzaei, Mohammadreza and Wang, Duolin and Xu, Dong},
-	title = {Prot2Token: A multi-task framework for protein language processing using autoregressive language modeling},
-	year = {2024},
-	doi = {10.1101/2024.05.31.596915},
-	journal = {bioRxiv}
+@article {,
+	author = {},
+	title = {},
+	year = {},
+	doi = {},
+	journal = {}
 }
 ```

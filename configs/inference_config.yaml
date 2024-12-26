@@ -1,0 +1,7 @@
+pretrained_config_path: ./results\residue_weight_savesepearte\5fold\fold1\config0824_multiCNN-linear_M0.3_M0.1_activation.yaml
+input_file: ./test_fasta.fasta
+output_dir: ./outputs/test/pred_ensemble
+model_dir: ./results\residue_weight_savesepearte\5fold
+constrain: True
+ensemble: True
+with_label: False

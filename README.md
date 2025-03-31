@@ -4,11 +4,6 @@
 
 This is the official repository of MuTarget paper.
 
-# To Do
-
-- [ ] Prepare install.sh file
-- [ ] Prepare Readme file
-- [ ] Refactor prediction code
 
 # Usage
 
